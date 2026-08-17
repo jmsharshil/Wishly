@@ -86,21 +86,32 @@ WSGI_APPLICATION = 'wishing.wsgi.application'
 
 if DEBUG:
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.sqlite3',
-            'NAME': BASE_DIR / 'db.sqlite3',
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
         }
     }
 else:
-    CONNECTION_STRING = os.environ['AZURE_POSTGRESQL_CONNECTIONSTRING']
-    conn_str_params = {pair.split('=')[0]: pair.split('=')[1] for pair in CONNECTION_STRING.split(' ')}
+    CONNECTION_STRING = os.environ["AZURE_POSTGRESQL_CONNECTIONSTRING"]
+
+    conn_str_params = {}
+
+    for pair in CONNECTION_STRING.split(";"):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            conn_str_params[key.strip()] = value.strip()
+
     DATABASES = {
-        'default': {
-            'ENGINE': 'django.db.backends.postgresql',
-            'NAME': conn_str_params['dbname'],
-            'HOST': conn_str_params['host'],
-            'USER': conn_str_params['user'],
-            'PASSWORD': conn_str_params['password'],
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": conn_str_params["Database"],
+            "HOST": conn_str_params["Server"],
+            "PORT": "5432",
+            "USER": conn_str_params["User Id"],
+            "PASSWORD": conn_str_params["Password"],
+            "OPTIONS": {
+                "sslmode": "require",
+            },
         }
     } 
 
