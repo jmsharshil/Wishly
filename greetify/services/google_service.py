@@ -233,8 +233,6 @@ def fetch_events_from_google(user):
 
                 # Check if event already exists
                 existing_event = Event.objects.filter(user=user, google_event_id=google_id).first()
-                
-                import datetime
                 dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
                 
                 if not existing_event:

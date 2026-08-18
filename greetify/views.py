@@ -671,8 +671,6 @@ class AppleSyncView(APIView):
             source_val = 'APPLE_CONTACTS' if contact_number else 'APPLE_CALENDAR'
 
             existing_event = Event.objects.filter(user=user, apple_event_id=external_id).first()
-            
-            import datetime
             dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
             
             if not existing_event:
