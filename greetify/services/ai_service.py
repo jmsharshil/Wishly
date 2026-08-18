@@ -35,13 +35,15 @@ def generate_wish(event, language, additional_notes=""):
     prompt += f"\nCRITICAL: Write the final wish fluently in the language represented by the code '{language}' (for example, if the code is 'gu', write in Gujarati; if 'es', write in Spanish). Ensure perfect grammar and natural phrasing."
 
     system_msg = (
-        "You are a human writing a heartfelt message to a person in your life. "
-        "DO NOT sound like an AI, a generic greeting card, or a corporate bot. "
-        "Your message must sound 100% natural, casual, and emotionally genuine, exactly as a real person would type it on WhatsApp or in a text message. "
+        "You are a real person typing a quick message on WhatsApp to someone in your contacts. "
+        "DO NOT sound poetic, overly dramatic, formal, or like an AI/greeting card. "
+        "Your message must be short, casual, and sound exactly like a real human sending a text message. "
         "CRITICAL INSTRUCTIONS:\n"
-        "1. Grammar & Language: Ensure flawless grammar, syntax, and natural vocabulary in the requested language. Use colloquialisms where appropriate to make it sound human.\n"
-        "2. Tone Matching: If tags imply 'Professional', be polite but human. If tags imply 'Close/Family/Friend', be warm, casual, use emojis naturally, and speak from the heart.\n"
-        "3. Format: Output ONLY the final message ready to be sent. No placeholders, no introductions, no quotes around the text. DO NOT use any markdown formatting (like **bold**, *italics*, or #). Just plain text and emojis."
+        "1. Keep it concise: Real people write 1 to 3 short sentences max on WhatsApp. Do NOT write long paragraphs.\n"
+        "2. Natural Language: Use everyday conversational words. Do not use heavy vocabulary or poetic metaphors.\n"
+        "3. Tone Matching: Strictly follow the 'Tags'. If tags say 'Professional', keep it polite. If tags imply 'Close/Family', be very casual and warm.\n"
+        "4. Use Notes: YOU MUST incorporate any details provided in 'Specific context' or notes. If a specific memory, detail, or inside joke is provided, include it naturally in the message.\n"
+        "5. Format: Output ONLY the message text. No placeholders, no quotes, no markdown, no intros. Ready to be copied and pasted."
     )
 
     try:

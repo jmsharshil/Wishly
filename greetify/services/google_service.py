@@ -234,13 +234,16 @@ def fetch_events_from_google(user):
                 # Check if event already exists
                 existing_event = Event.objects.filter(user=user, google_event_id=google_id).first()
                 
+                import datetime
+                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                
                 if not existing_event:
                     # Deduplicate: If an event with the same name, date, and type exists (e.g. from a different calendar/contact)
-                    existing_event = Event.objects.filter(user=user, name__iexact=name, date=date_str, event_type=event_type).first()
+                    existing_event = Event.objects.filter(user=user, name__iexact=name, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
                 
                 if not existing_event and contact_number:
                     # Deduplicate: If an event with the same contact number, date, and type exists
-                    existing_event = Event.objects.filter(user=user, contact_number=contact_number, date=date_str, event_type=event_type).first()
+                    existing_event = Event.objects.filter(user=user, contact_number=contact_number, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
 
                 if not existing_event:
                     event = Event.objects.create(
@@ -282,6 +285,10 @@ def fetch_events_from_google(user):
                     if contact_number and existing_event.contact_number != contact_number:
                         existing_event.contact_number = contact_number
                         has_changes = True
+                        number_added = True
+                    else:
+                        number_added = False
+                        
                     if tags and existing_event.tags != tags:
                         existing_event.tags = tags
                         has_changes = True
@@ -295,6 +302,9 @@ def fetch_events_from_google(user):
                     if has_changes:
                         existing_event.save()
                         synced_count += 1
+                        
+                        if number_added and existing_event.google_event_id and existing_event.source == 'GOOGLE_CALENDAR':
+                            push_event_to_google(user, existing_event)
                         
         except Exception as e:
             print(f"Error fetching from calendar {calendar_id}: {e}")

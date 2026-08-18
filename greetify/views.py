@@ -589,27 +589,57 @@ class AppleSyncView(APIView):
             if not date_str:
                 continue
 
+            summary_lower = title.lower().replace(" ", "").replace("'", "")
+            
+            birthday_synonyms = [
+                'birthday', 'bday', 'birtday', 'birth', 'happybirthday',
+                'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth'
+            ]
+            anniversary_synonyms = [
+                'anniversary', 'marriageanniversary', 'happyanniversary',
+                'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi'
+            ]
+            
             event_type = 'Custom'
-            summary_lower = title.lower()
-            if 'birthday' in summary_lower or 'bday' in summary_lower:
+            if any(syn in summary_lower for syn in birthday_synonyms):
                 event_type = 'Birthday'
-            elif 'anniversary' in summary_lower:
+            elif any(syn in summary_lower for syn in anniversary_synonyms):
                 event_type = 'Anniversary'
 
             # Extract name from title (e.g. "Pranjal's Birthday" or "Pranjal’s Birthday" -> "Pranjal")
             name = title
             match = re.search(r"^(.*?)['’]s\s+(.+)$", title, re.IGNORECASE)
+            is_explicit_format = False
+            
             if match:
                 name = match.group(1).strip()
+                extracted_type = match.group(2).strip().title()
+                is_explicit_format = True
+                if event_type == 'Custom':
+                    event_type = extracted_type
             else:
                 if name.lower().endswith(" birthday"):
                     name = name[:-9].strip()
+                    is_explicit_format = True
                 elif name.lower().endswith(" anniversary"):
                     name = name[:-12].strip()
+                    is_explicit_format = True
                     
                 # Extra cleanup just in case
                 if name.endswith("'s") or name.endswith("’s"):
                     name = name[:-2].strip()
+                    
+            # Allow common personal events even without the 's format
+            personal_event_keywords = [
+                'house warming', 'housewarming', 'exam', 'test', 'wedding', 'graduation',
+                'baby shower', 'babyshower', 'engagement', 'farewell', 'retirement'
+            ]
+            if any(keyword in summary_lower for keyword in personal_event_keywords):
+                is_explicit_format = True
+                    
+            # Skip generic calendar events (like festivals, meetings) if they don't look like personal events
+            if event_type == 'Custom' and not is_explicit_format:
+                continue
 
             # Find phone number and notes from contact
             contact_number = None
@@ -641,8 +671,14 @@ class AppleSyncView(APIView):
             source_val = 'APPLE_CONTACTS' if contact_number else 'APPLE_CALENDAR'
 
             existing_event = Event.objects.filter(user=user, apple_event_id=external_id).first()
+            
+            import datetime
+            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            
             if not existing_event:
-                existing_event = Event.objects.filter(user=user, name=name, date=date_str, source=source_val).first()
+                existing_event = Event.objects.filter(user=user, name__iexact=name, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
+            if not existing_event and contact_number:
+                existing_event = Event.objects.filter(user=user, contact_number=contact_number, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
 
             if not existing_event:
                 event = Event.objects.create(
