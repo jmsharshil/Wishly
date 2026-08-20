@@ -315,10 +315,15 @@ def get_dashboard(request):
     ).values('event').distinct().count()
     
     # Total wishes sent overall
-    total_sent = WishHistory.objects.filter(
+    total_sent_qs = WishHistory.objects.filter(
         user=request.user,
         status='SENT'
-    ).count()
+    )
+    if provider == 'GOOGLE':
+        total_sent_qs = total_sent_qs.exclude(event__source__startswith='APPLE')
+    elif provider == 'APPLE':
+        total_sent_qs = total_sent_qs.exclude(event__source__startswith='GOOGLE')
+    total_sent = total_sent_qs.count()
     
     upcoming_events_count = len(upcoming_events_list)
     upcoming_events_qs = [item[1] for item in upcoming_events_list[:5]]
@@ -330,7 +335,14 @@ def get_dashboard(request):
     recent_wishes_qs = WishHistory.objects.filter(
         user=request.user,
         event__isnull=False
-    ).order_by('-created_at')[:5]
+    )
+    
+    if provider == 'GOOGLE':
+        recent_wishes_qs = recent_wishes_qs.exclude(event__source__startswith='APPLE')
+    elif provider == 'APPLE':
+        recent_wishes_qs = recent_wishes_qs.exclude(event__source__startswith='GOOGLE')
+        
+    recent_wishes_qs = recent_wishes_qs.order_by('-created_at')[:5]
     recent_wishes_data = WishHistorySerializer(recent_wishes_qs, many=True).data
 
     return Response({
@@ -356,7 +368,16 @@ class EventViewSet(viewsets.ModelViewSet):
     pagination_class = StandardResultsSetPagination
 
     def _get_cleaned_filter_types(self, user):
-        distinct_types = Event.objects.filter(user=user).values_list('event_type', flat=True).distinct()
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        provider = profile.last_login_provider
+        
+        qs = Event.objects.filter(user=user)
+        if provider == 'GOOGLE':
+            qs = qs.exclude(source__startswith='APPLE')
+        elif provider == 'APPLE':
+            qs = qs.exclude(source__startswith='GOOGLE')
+            
+        distinct_types = qs.values_list('event_type', flat=True).distinct()
         
         cleaned_types = set()
         birthday_synonyms = ['birthday', 'bday', 'birtday', 'birth', 'happybirthday', 'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth']
@@ -565,6 +586,15 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
 
     def get_queryset(self):
         queryset = WishHistory.objects.filter(user=self.request.user, status='SENT')
+        
+        # Filter by login provider
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        provider = profile.last_login_provider
+        if provider == 'GOOGLE':
+            queryset = queryset.exclude(event__source__startswith='APPLE')
+        elif provider == 'APPLE':
+            queryset = queryset.exclude(event__source__startswith='GOOGLE')
+            
         time_filter = self.request.query_params.get('filter')
         search_query = self.request.query_params.get('search')
         
