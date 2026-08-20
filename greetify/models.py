@@ -63,3 +63,14 @@ class WishHistory(models.Model):
 
     def __str__(self):
         return f"Wish for {self.event.name if self.event else 'Unknown'} - {self.status}"
+
+class DeletedEventLog(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    external_id = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'external_id')
+        
+    def __str__(self):
+        return f"Deleted {self.external_id} for {self.user.username}"

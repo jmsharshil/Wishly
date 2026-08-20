@@ -124,6 +124,9 @@ def fetch_events_from_google(user):
 
     for calendar_id in calendars_to_sync:
         try:
+            from greetify.models import DeletedEventLog
+            deleted_ids = set(DeletedEventLog.objects.filter(user=user).values_list('external_id', flat=True))
+            
             events_result = service.events().list(
                 calendarId=calendar_id, 
                 timeMin=now,
@@ -137,6 +140,10 @@ def fetch_events_from_google(user):
             import re
             
             for item in events:
+                google_event_id = item.get('id')
+                if google_event_id and google_event_id in deleted_ids:
+                    continue
+                    
                 summary_raw = item.get('summary', 'Unknown')
                 summary = summary_raw.lower()
                 is_birthday_cal = calendar_id != 'primary'

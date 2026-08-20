@@ -498,10 +498,22 @@ class EventViewSet(viewsets.ModelViewSet):
         push_contact_to_google(self.request.user, event)
 
     def perform_destroy(self, instance):
+        from .models import DeletedEventLog
+        
         if instance.google_event_id:
             delete_event_from_google(self.request.user, instance.google_event_id)
+            DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.google_event_id)
+            
         if instance.google_contact_id:
             delete_contact_from_google(self.request.user, instance.google_contact_id)
+            DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.google_contact_id)
+            
+        if instance.apple_event_id:
+            DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.apple_event_id)
+            
+        if instance.apple_contact_id:
+            DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.apple_contact_id)
+            
         instance.delete()
 
 @api_view(['POST'])
@@ -627,10 +639,16 @@ class AppleSyncView(APIView):
         user = request.user
         contacts_data = request.data.get('contacts', [])
         events_data = request.data.get('events', [])
-        
+        from .models import DeletedEventLog
+        deleted_ids = set(DeletedEventLog.objects.filter(user=user).values_list('external_id', flat=True))
+
         # Build a map of contact names to full contact info
         contact_map = {}
         for contact_info in contacts_data:
+            contact_id = contact_info.get('id')
+            if contact_id and contact_id in deleted_ids:
+                continue
+                
             given_name = contact_info.get('givenName', '')
             family_name = contact_info.get('familyName', '')
             
@@ -644,6 +662,9 @@ class AppleSyncView(APIView):
         for event_info in events_data:
             import re
             external_id = event_info.get('id')
+            if external_id and external_id in deleted_ids:
+                continue
+                
             title = event_info.get('title', 'Untitled Event')
             start_date = event_info.get('startDate')
             notes = event_info.get('notes', '')
