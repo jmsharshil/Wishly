@@ -141,10 +141,13 @@ def google_auth_mobile(request):
     profile, p_created = UserProfile.objects.get_or_create(user=user)
     
     profile.google_access_token = access_token
+    refresh_token = request.data.get('refresh_token')
+    if refresh_token:
+        profile.google_refresh_token = refresh_token
+        
     if 'picture' in user_info:
         profile.profile_picture = user_info['picture']
-    # Note: Mobile SDKs typically handle refresh_token automatically, 
-    # but if needed, you can pass it from the app and save it here.
+        
     profile.last_login_provider = 'GOOGLE'
     profile.save()
 
