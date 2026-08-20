@@ -64,7 +64,7 @@ def fetch_events_from_google(user):
     """Fetches upcoming events and birthdays for the user."""
     service = _get_google_calendar_service(user)
     if not service:
-        return 0
+        return {"error": "no_account_linked", "message": "Google account is not linked or token is missing."}
 
     now = datetime.datetime.utcnow().isoformat() + 'Z'
     next_year = (datetime.datetime.utcnow() + datetime.timedelta(days=365)).isoformat() + 'Z'
@@ -117,6 +117,9 @@ def fetch_events_from_google(user):
                                 name_key = f"{name_str}_{month}_{day}"
                                 contact_phone_map_exact[name_key] = phone_val
         except Exception as e:
+            from googleapiclient.errors import HttpError
+            if isinstance(e, HttpError) and e.resp.status in [401, 403]:
+                return {"error": "permission_denied", "message": "don't have permission to access of calender or contacts"}
             print(f"Failed to fetch contacts for phone mapping: {e}")
 
     for calendar_id in calendars_to_sync:
@@ -305,6 +308,9 @@ def fetch_events_from_google(user):
                             push_event_to_google(user, existing_event)
                         
         except Exception as e:
+            from googleapiclient.errors import HttpError
+            if isinstance(e, HttpError) and e.resp.status in [401, 403]:
+                return {"error": "permission_denied", "message": "don't have permission to access of calender or contacts"}
             print(f"Error fetching from calendar {calendar_id}: {e}")
             continue
 

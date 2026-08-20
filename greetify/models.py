@@ -15,6 +15,7 @@ class UserProfile(models.Model):
     phone_number = models.CharField(max_length=20, blank=True, null=True, unique=True)
     profile_picture = models.URLField(blank=True, null=True)
     subscription_tier = models.CharField(max_length=10, choices=SUBSCRIPTION_CHOICES, default='FREE')
+    last_login_provider = models.CharField(max_length=20, default='APP')
 
     def __str__(self):
         return self.user.username

@@ -99,6 +99,7 @@ def google_auth_callback(request):
         profile.google_refresh_token = refresh_token
     if 'picture' in user_info:
         profile.profile_picture = user_info['picture']
+    profile.last_login_provider = 'GOOGLE'
     profile.save()
 
     # Create DRF Token
@@ -144,6 +145,7 @@ def google_auth_mobile(request):
         profile.profile_picture = user_info['picture']
     # Note: Mobile SDKs typically handle refresh_token automatically, 
     # but if needed, you can pass it from the app and save it here.
+    profile.last_login_provider = 'GOOGLE'
     profile.save()
 
     # Create DRF Token
@@ -188,6 +190,8 @@ class AppleAuthVerifyView(APIView):
         try:
             profile = UserProfile.objects.get(apple_user_id=apple_id)
             user = profile.user
+            profile.last_login_provider = 'APPLE'
+            profile.save()
         except UserProfile.DoesNotExist:
             pass
             
@@ -198,7 +202,8 @@ class AppleAuthVerifyView(APIView):
                 profile, _ = UserProfile.objects.get_or_create(user=user)
                 if not profile.apple_user_id:
                     profile.apple_user_id = apple_id
-                    profile.save()
+                profile.last_login_provider = 'APPLE'
+                profile.save()
             except User.DoesNotExist:
                 pass
                 
@@ -223,7 +228,8 @@ class AppleAuthVerifyView(APIView):
             profile = UserProfile.objects.create(
                 user=user,
                 apple_user_id=apple_id,
-                phone_number=phone_number
+                phone_number=phone_number,
+                last_login_provider='APPLE'
             )
             
         # Create DRF Token
@@ -261,7 +267,14 @@ def get_dashboard(request):
     profile_data = UserProfileSerializer(profile).data
     
     # Fetch all events to handle recurring annual events correctly (birthdays, etc.)
-    all_events = Event.objects.filter(user=request.user)
+    all_events = Event.objects.filter(user=request.user).order_by('date')
+    
+    # Filter by login provider
+    provider = profile.last_login_provider
+    if provider == 'GOOGLE':
+        all_events = all_events.exclude(source__startswith='APPLE')
+    elif provider == 'APPLE':
+        all_events = all_events.exclude(source__startswith='GOOGLE')
     
     events_today = []
     upcoming_events_list = []
@@ -311,6 +324,8 @@ def get_dashboard(request):
     upcoming_events_qs = [item[1] for item in upcoming_events_list[:5]]
     upcoming_events_data = EventSerializer(upcoming_events_qs, many=True).data
     
+    events_today_data = EventSerializer(events_today, many=True).data
+    
     # Recent Wishes (Last 5)
     recent_wishes_qs = WishHistory.objects.filter(
         user=request.user,
@@ -329,6 +344,7 @@ def get_dashboard(request):
             'upcoming_events_count': upcoming_events_count,
             'streak': 12, # Mock streak
         },
+        'today_events': events_today_data,
         'upcoming_events': upcoming_events_data,
         'recent_wishes': recent_wishes_data
     })
@@ -361,6 +377,15 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = Event.objects.filter(user=self.request.user)
+        
+        # Filter by login provider
+        profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
+        provider = profile.last_login_provider
+        if provider == 'GOOGLE':
+            queryset = queryset.exclude(source__startswith='APPLE')
+        elif provider == 'APPLE':
+            queryset = queryset.exclude(source__startswith='GOOGLE')
+            
         event_type = self.request.query_params.get('event_type')
         
         if event_type:
@@ -459,11 +484,19 @@ class EventViewSet(viewsets.ModelViewSet):
 @permission_classes([IsAuthenticated])
 def sync_google_events(request):
     """Triggers sync with Google Calendar/Contacts."""
-    synced_count = fetch_events_from_google(request.user)
+    result = fetch_events_from_google(request.user)
+    
+    if isinstance(result, dict) and "error" in result:
+        return Response({
+            'status': 'error',
+            'code': result['error'],
+            'message': result['message']
+        }, status=status.HTTP_403_FORBIDDEN)
+        
     return Response({
         'status': 'success',
-        'message': f'Successfully synced {synced_count} events from Google Calendar.',
-        'synced_count': synced_count
+        'message': f'Successfully synced {result} events from Google Calendar.',
+        'synced_count': result
     })
 
 @api_view(['POST'])
@@ -552,7 +585,7 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
                 Q(event__name__icontains=search_query)
             )
                 
-        return queryset.order_by('-created_at')
+        return queryset.order_by('created_at')
 
 class AppleSyncView(APIView):
     permission_classes = [IsAuthenticated]

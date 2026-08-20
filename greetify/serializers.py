@@ -8,7 +8,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = UserProfile
-        fields = ('username', 'email', 'profile_picture', 'subscription_tier')
+        fields = ('username', 'email', 'profile_picture', 'subscription_tier', 'last_login_provider')
 
 class FlexibleDateField(serializers.DateField):
     def to_internal_value(self, value):
