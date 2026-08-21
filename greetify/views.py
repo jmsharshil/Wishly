@@ -301,10 +301,8 @@ def get_dashboard(request):
         days_until = (next_date - today).days
         
         if days_until == 0:
-            event.date = next_date
             events_today.append(event)
         elif 0 < days_until <= 30:
-            event.date = next_date
             upcoming_events_list.append((days_until, event))
             
     upcoming_events_list.sort(key=lambda x: x[0])
