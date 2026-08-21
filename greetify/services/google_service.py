@@ -154,7 +154,9 @@ def fetch_events_from_google(user):
             
             for item in events:
                 google_id = item.get('id')
-                master_id = item.get('recurringEventId') or google_id
+                master_id = item.get('recurringEventId')
+                if not master_id:
+                    master_id = google_id.split('_')[0] if '_' in google_id else google_id
                 
                 if master_id in deleted_ids or google_id in deleted_ids:
                     continue
