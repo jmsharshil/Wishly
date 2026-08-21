@@ -346,7 +346,12 @@ def get_dashboard(request):
         recent_wishes_qs = recent_wishes_qs.exclude(event__source__startswith='GOOGLE')
         
     recent_wishes_qs = recent_wishes_qs.order_by('-created_at')[:5]
-    recent_wishes_data = WishHistorySerializer(recent_wishes_qs, many=True).data
+    
+    # Sort them in ascending order by date
+    recent_wishes_list = list(recent_wishes_qs)
+    recent_wishes_list.sort(key=lambda w: w.created_at)
+    
+    recent_wishes_data = WishHistorySerializer(recent_wishes_list, many=True).data
 
     return Response({
         'user_profile': profile_data,
