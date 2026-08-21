@@ -449,6 +449,13 @@ class EventViewSet(viewsets.ModelViewSet):
                 # Note: expects standard YYYY-MM-DD format from the frontend query
                 queryset = queryset.filter(date__in=date_list)
                 
+        # Source filtering (handles single and comma-separated multiple)
+        sources = self.request.query_params.get('source')
+        if sources:
+            source_list = [s.strip().upper() for s in sources.split(',') if s.strip()]
+            if source_list:
+                queryset = queryset.filter(source__in=source_list)
+                
         # Search filtering
         search_query = self.request.query_params.get('search')
         if search_query:
@@ -659,11 +666,17 @@ class AppleSyncView(APIView):
                 contact_map[given_name.lower()] = contact_info
 
         # Process Calendar Events
+        processed_external_ids = set()
         for event_info in events_data:
             import re
             external_id = event_info.get('id')
             if external_id and external_id in deleted_ids:
                 continue
+                
+            if external_id in processed_external_ids:
+                continue
+            if external_id:
+                processed_external_ids.add(external_id)
                 
             title = event_info.get('title', 'Untitled Event')
             start_date = event_info.get('startDate')
@@ -777,13 +790,21 @@ class AppleSyncView(APIView):
                     source=source_val
                 )
             else:
-                existing_event.name = name
-                existing_event.date = date_str
-                existing_event.notes_for_ai = final_notes
-                existing_event.event_type = event_type
-                existing_event.source = source_val
-                if contact_number:
-                    existing_event.contact_number = contact_number
+                is_manual = existing_event.source == 'APP'
+                if not is_manual:
+                    existing_event.name = name
+                    existing_event.date = date_str
+                    existing_event.notes_for_ai = final_notes
+                    existing_event.event_type = event_type
+                    existing_event.source = source_val
+                    
+                if not is_manual or not existing_event.contact_number:
+                    if contact_number:
+                        existing_event.contact_number = contact_number
+                        
+                if existing_event.apple_event_id != external_id:
+                    existing_event.apple_event_id = external_id
+                    
                 existing_event.save()
                 event = existing_event
                 

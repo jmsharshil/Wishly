@@ -22,18 +22,28 @@ def handle_google_callback(code):
     # To be implemented
     pass
 
-def _get_google_calendar_service(user):
+def get_google_credentials(user):
     profile = user.profile
     if not profile.google_access_token:
         return None
-
-    creds = Credentials(
+    return Credentials(
         token=profile.google_access_token,
         refresh_token=profile.google_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.environ.get('GOOGLE_CLIENT_ID'),
         client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
     )
+
+def _save_creds_if_refreshed(user, creds):
+    if creds and creds.token and creds.token != user.profile.google_access_token:
+        user.profile.google_access_token = creds.token
+        user.profile.save()
+
+def _get_google_calendar_service(user, creds=None):
+    if not creds:
+        creds = get_google_credentials(user)
+    if not creds:
+        return None
     
     try:
         return build('calendar', 'v3', credentials=creds)
@@ -41,18 +51,11 @@ def _get_google_calendar_service(user):
         print(f"Failed to build Google Calendar service: {e}")
         return None
 
-def _get_google_people_service(user):
-    profile = user.profile
-    if not profile.google_access_token:
+def _get_google_people_service(user, creds=None):
+    if not creds:
+        creds = get_google_credentials(user)
+    if not creds:
         return None
-
-    creds = Credentials(
-        token=profile.google_access_token,
-        refresh_token=profile.google_refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=os.environ.get('GOOGLE_CLIENT_ID'),
-        client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
-    )
     
     try:
         return build('people', 'v1', credentials=creds)
@@ -62,19 +65,21 @@ def _get_google_people_service(user):
 
 def fetch_events_from_google(user):
     """Fetches upcoming events and birthdays for the user."""
-    service = _get_google_calendar_service(user)
+    creds = get_google_credentials(user)
+    service = _get_google_calendar_service(user, creds=creds)
     if not service:
         return {"error": "no_account_linked", "message": "Google account is not linked or token is missing."}
 
-    now = datetime.datetime.utcnow().isoformat() + 'Z'
-    next_year = (datetime.datetime.utcnow() + datetime.timedelta(days=365)).isoformat() + 'Z'
+    # Fetch events starting from 2 days ago to avoid timezone boundaries dropping today's completed events
+    time_min = (datetime.datetime.utcnow() - datetime.timedelta(days=2)).isoformat() + 'Z'
+    time_max = (datetime.datetime.utcnow() + datetime.timedelta(days=365)).isoformat() + 'Z'
 
     calendars_to_sync = ['primary', 'addressbook#contacts@group.v.calendar.google.com']
     synced_count = 0
     fetched_google_ids = []
     
     # Pre-fetch Google Contacts to get phone numbers for birthday calendar events
-    people_service = _get_google_people_service(user)
+    people_service = _get_google_people_service(user, creds=creds)
     contact_phone_map_exact = {}
     contact_phone_map_name = {}
     
@@ -118,9 +123,16 @@ def fetch_events_from_google(user):
                                 contact_phone_map_exact[name_key] = phone_val
         except Exception as e:
             from googleapiclient.errors import HttpError
+            from google.auth.exceptions import RefreshError
             if isinstance(e, HttpError) and e.resp.status in [401, 403]:
+                _save_creds_if_refreshed(user, creds)
                 return {"error": "permission_denied", "message": "don't have permission to access of calender or contacts"}
+            if isinstance(e, RefreshError):
+                _save_creds_if_refreshed(user, creds)
+                return {"error": "permission_denied", "message": "Session expired, please login again"}
             print(f"Failed to fetch contacts for phone mapping: {e}")
+
+    sync_success = True
 
     for calendar_id in calendars_to_sync:
         try:
@@ -129,8 +141,8 @@ def fetch_events_from_google(user):
             
             events_result = service.events().list(
                 calendarId=calendar_id, 
-                timeMin=now,
-                timeMax=next_year,
+                timeMin=time_min,
+                timeMax=time_max,
                 maxResults=100, 
                 singleEvents=True,
                 orderBy='startTime'
@@ -138,11 +150,18 @@ def fetch_events_from_google(user):
             events = events_result.get('items', [])
 
             import re
+            processed_master_ids = set()
             
             for item in events:
-                google_event_id = item.get('id')
-                if google_event_id and google_event_id in deleted_ids:
+                google_id = item.get('id')
+                master_id = item.get('recurringEventId') or google_id
+                
+                if master_id in deleted_ids or google_id in deleted_ids:
                     continue
+                    
+                if master_id in processed_master_ids:
+                    continue
+                processed_master_ids.add(master_id)
                     
                 summary_raw = item.get('summary', 'Unknown')
                 summary = summary_raw.lower()
@@ -182,7 +201,7 @@ def fetch_events_from_google(user):
                     'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi'
                 ]
                 
-                if is_birthday_cal or any(syn in summary_lower for syn in birthday_synonyms):
+                if any(syn in summary_lower for syn in birthday_synonyms):
                     event_type = 'Birthday'
                 elif any(syn in summary_lower for syn in anniversary_synonyms):
                     event_type = 'Anniversary'
@@ -202,8 +221,14 @@ def fetch_events_from_google(user):
                     # Fallback for exact matches if the regex didn't catch something strange
                     if name.lower().endswith(" birthday"):
                         name = name[:-9].strip()
+                        event_type = 'Birthday'
                     elif name.lower().endswith(" anniversary"):
                         name = name[:-12].strip()
+                        event_type = 'Anniversary'
+                        
+                # Finally, if it's from contacts and we still couldn't figure it out, assume Birthday
+                if event_type == 'Custom' and is_birthday_cal:
+                    event_type = 'Birthday'
                         
                 if is_birthday_cal and not contact_number:
                     clean_name = name.strip().lower()
@@ -236,13 +261,15 @@ def fetch_events_from_google(user):
                 
                 # Convert to YYYY-MM-DD
                 date_str = start[:10]
-                google_id = item['id']
-                fetched_google_ids.append(google_id)
+                fetched_google_ids.append(master_id)
 
                 source_val = 'GOOGLE_CONTACTS' if is_birthday_cal else 'GOOGLE_CALENDAR'
 
-                # Check if event already exists
-                existing_event = Event.objects.filter(user=user, google_event_id=google_id).first()
+                # Check if event already exists by master_id, or fallback to instance id for backward compatibility
+                existing_event = Event.objects.filter(user=user, google_event_id=master_id).first()
+                if not existing_event:
+                    existing_event = Event.objects.filter(user=user, google_event_id=google_id).first()
+                    
                 dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
                 
                 if not existing_event:
@@ -259,7 +286,7 @@ def fetch_events_from_google(user):
                         name=name,
                         date=date_str,
                         event_type=event_type,
-                        google_event_id=google_id,
+                        google_event_id=master_id,
                         contact_number=contact_number,
                         tags=tags,
                         notes_for_ai=notes_for_ai,
@@ -284,6 +311,9 @@ def fetch_events_from_google(user):
                 else:
                     # If it exists, update it if name or date changed
                     has_changes = False
+                    if existing_event.google_event_id != master_id:
+                        existing_event.google_event_id = master_id
+                        has_changes = True
                     if existing_event.name != name:
                         existing_event.name = name
                         has_changes = True
@@ -303,7 +333,7 @@ def fetch_events_from_google(user):
                     if notes_for_ai and existing_event.notes_for_ai != notes_for_ai:
                         existing_event.notes_for_ai = notes_for_ai
                         has_changes = True
-                    if existing_event.source != source_val:
+                    if existing_event.source != source_val and existing_event.source != 'APP':
                         existing_event.source = source_val
                         has_changes = True
                         
@@ -316,28 +346,37 @@ def fetch_events_from_google(user):
                         
         except Exception as e:
             from googleapiclient.errors import HttpError
+            from google.auth.exceptions import RefreshError
+            sync_success = False
             if isinstance(e, HttpError) and e.resp.status in [401, 403]:
+                _save_creds_if_refreshed(user, creds)
                 return {"error": "permission_denied", "message": "don't have permission to access of calender or contacts"}
+            if isinstance(e, RefreshError):
+                _save_creds_if_refreshed(user, creds)
+                return {"error": "permission_denied", "message": "Session expired, please login again"}
             print(f"Error fetching from calendar {calendar_id}: {e}")
             continue
 
     # Cleanup deleted events: 
     # If an event exists in our DB with a google_event_id, and its date is >= today, 
     # but it was not fetched from Google, it means it was deleted on Google.
-    today_str = datetime.datetime.utcnow().date().isoformat()
-    Event.objects.filter(
-        user=user,
-        google_event_id__isnull=False,
-        date__gte=today_str
-    ).exclude(
-        google_event_id__in=fetched_google_ids
-    ).delete()
+    if sync_success:
+        today_str = datetime.datetime.utcnow().date().isoformat()
+        Event.objects.filter(
+            user=user,
+            google_event_id__isnull=False,
+            date__gte=today_str
+        ).exclude(
+            google_event_id__in=fetched_google_ids
+        ).delete()
             
+    _save_creds_if_refreshed(user, creds)
     return synced_count
 
 def push_event_to_google(user, event):
     """Creates or updates an event in Google Calendar."""
-    service = _get_google_calendar_service(user)
+    creds = get_google_credentials(user)
+    service = _get_google_calendar_service(user, creds=creds)
     if not service:
         return False
         
@@ -399,9 +438,11 @@ def push_event_to_google(user, event):
             event.google_event_id = created_event['id']
             event.save()
             
+        _save_creds_if_refreshed(user, creds)
         return True
     except Exception as e:
         print(f"Failed to push event to Google Calendar: {e}")
+        _save_creds_if_refreshed(user, creds)
         return False
 
 def delete_event_from_google(user, google_event_id):
@@ -409,7 +450,8 @@ def delete_event_from_google(user, google_event_id):
     if not google_event_id:
         return False
         
-    service = _get_google_calendar_service(user)
+    creds = get_google_credentials(user)
+    service = _get_google_calendar_service(user, creds=creds)
     if not service:
         return False
         
@@ -418,14 +460,17 @@ def delete_event_from_google(user, google_event_id):
             calendarId='primary',
             eventId=google_event_id
         ).execute()
+        _save_creds_if_refreshed(user, creds)
         return True
     except Exception as e:
         print(f"Failed to delete event from Google Calendar: {e}")
+        _save_creds_if_refreshed(user, creds)
         return False
 
 def push_contact_to_google(user, event):
     """Creates or updates a contact in Google Contacts with the event date."""
-    service = _get_google_people_service(user)
+    creds = get_google_credentials(user)
+    service = _get_google_people_service(user, creds=creds)
     if not service:
         return False
 
@@ -468,9 +513,11 @@ def push_contact_to_google(user, event):
             event.google_contact_id = created_contact.get('resourceName')
             event.save()
             
+        _save_creds_if_refreshed(user, creds)
         return True
     except Exception as e:
         print(f"Failed to push contact to Google Contacts: {e}")
+        _save_creds_if_refreshed(user, creds)
         return False
 
 def delete_contact_from_google(user, google_contact_id):
@@ -478,7 +525,8 @@ def delete_contact_from_google(user, google_contact_id):
     if not google_contact_id:
         return False
         
-    service = _get_google_people_service(user)
+    creds = get_google_credentials(user)
+    service = _get_google_people_service(user, creds=creds)
     if not service:
         return False
         
@@ -486,7 +534,9 @@ def delete_contact_from_google(user, google_contact_id):
         service.people().deleteContact(
             resourceName=google_contact_id
         ).execute()
+        _save_creds_if_refreshed(user, creds)
         return True
     except Exception as e:
         print(f"Failed to delete contact from Google Contacts: {e}")
+        _save_creds_if_refreshed(user, creds)
         return False
