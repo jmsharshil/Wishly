@@ -329,11 +329,6 @@ def get_dashboard(request):
                 if next_date < today:
                     # If it already passed this year, next occurrence is next year
                     next_date = next_date.replace(year=today.year + 1)
-                    
-                # If the original event hasn't even happened for the first time yet (e.g., future year)
-                # We should not recur it backwards in time.
-                if event.date > next_date:
-                    next_date = event.date
             except ValueError:
                 # Handle leap year (Feb 29) on non-leap years
                 if event.date.month == 2 and event.date.day == 29:
@@ -346,10 +341,6 @@ def get_dashboard(request):
                             next_date = datetime.date(next_year, 2, 29)
                         except ValueError:
                             next_date = datetime.date(next_year, 3, 1)
-                            
-                    # Prevent recurring backwards in time for future leap year events
-                    if event.date > next_date:
-                        next_date = event.date
                 else:
                     continue
         else:
