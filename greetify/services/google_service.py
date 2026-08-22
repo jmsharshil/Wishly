@@ -210,10 +210,6 @@ def fetch_events_from_google(user):
                 # Finally, if it's from contacts and we still couldn't figure it out, assume Birthday
                 if event_type == 'Custom' and is_birthday_cal:
                     event_type = 'Birthday'
-                    
-                # Skip generic calendar events (like festivals, meetings) if they don't look like personal events
-                if event_type == 'Custom' and not is_explicit_format:
-                    continue
                         
                 if is_birthday_cal and not contact_number:
                     clean_name = name.strip().lower()
