@@ -23,6 +23,10 @@ from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
 from django.db import transaction
 import threading
+from concurrent.futures import ThreadPoolExecutor
+
+# Create a thread pool to avoid spawning 100+ threads simultaneously during bulk sync
+ai_executor = ThreadPoolExecutor(max_workers=5)
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
@@ -49,7 +53,7 @@ def async_generate_wish(user_id, event_id):
             from django.db import connection
             connection.close()
     
-    threading.Thread(target=run, daemon=True).start()
+    ai_executor.submit(run)
 
 @api_view(['GET'])
 def google_auth_url(request):
@@ -116,7 +120,7 @@ def google_auth_callback(request):
         return Response({'error': 'Email not provided by Google'}, status=status.HTTP_400_BAD_REQUEST)
 
     # Get or create User
-    user, created = User.objects.get_or_create(email=email, defaults={'username': email})
+    user, created = User.objects.get_or_create(email=email, defaults={'username': username})
     
     # Get or create UserProfile
     profile, p_created = UserProfile.objects.get_or_create(user=user)
@@ -291,7 +295,14 @@ def get_profile(request):
 @permission_classes([IsAuthenticated])
 def get_dashboard(request):
     """Returns dashboard stats."""
-    today = timezone.now().date()
+    local_date_str = request.query_params.get('local_date')
+    if local_date_str:
+        try:
+            today = datetime.datetime.strptime(local_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            today = timezone.now().date()
+    else:
+        today = timezone.now().date()
     
     # User Profile
     profile, created = UserProfile.objects.get_or_create(user=request.user)
