@@ -133,6 +133,22 @@ def fetch_events_from_google(user):
             print(f"Failed to fetch contacts for phone mapping: {e}")
 
     sync_success = True
+    
+    # Pre-fetch existing events to avoid N+1 queries during sync
+    existing_events = list(Event.objects.filter(user=user))
+    existing_by_google_id = {e.google_event_id: e for e in existing_events if e.google_event_id}
+    existing_by_name_md = {}
+    existing_by_name_ymd = {}
+    existing_by_phone_md = {}
+    
+    for e in existing_events:
+        name_lower = e.name.strip().lower()
+        if e.event_type in ['Birthday', 'Anniversary']:
+            existing_by_name_md[(name_lower, e.date.month, e.date.day)] = e
+            if e.contact_number:
+                existing_by_phone_md[(e.contact_number, e.date.month, e.date.day)] = e
+        else:
+            existing_by_name_ymd[(name_lower, e.date.year, e.date.month, e.date.day)] = e
 
     for calendar_id in calendars_to_sync:
         try:
@@ -188,47 +204,16 @@ def fetch_events_from_google(user):
                     # The remaining text is notes for AI
                     notes_for_ai = description.strip()
                 
-                # Determine event type based on keywords, otherwise fallback to Custom
-                event_type = 'Custom'
-                summary_lower = summary_raw.lower().replace(" ", "").replace("'", "")
-                
-                birthday_synonyms = [
-                    'birthday', 'bday', 'birtday', 'birth', 'happybirthday',
-                    'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth'
-                ]
-                anniversary_synonyms = [
-                    'anniversary', 'marriageanniversary', 'happyanniversary',
-                    'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi'
-                ]
-                
-                if any(syn in summary_lower for syn in birthday_synonyms):
-                    event_type = 'Birthday'
-                elif any(syn in summary_lower for syn in anniversary_synonyms):
-                    event_type = 'Anniversary'
-                
-                # Clean up the name and extract custom event types (e.g., "Pranjal's Graduation")
-                name = summary_raw
-                match = re.search(r"^(.*?)'s\s+(.+)$", summary_raw, re.IGNORECASE)
-                
-                if match:
-                    name = match.group(1).strip()
-                    extracted_type = match.group(2).strip().title()
-                    
-                    # If it wasn't already identified as Birthday or Anniversary, use the extracted custom type
-                    if event_type == 'Custom':
-                        event_type = extracted_type
-                else:
-                    # Fallback for exact matches if the regex didn't catch something strange
-                    if name.lower().endswith(" birthday"):
-                        name = name[:-9].strip()
-                        event_type = 'Birthday'
-                    elif name.lower().endswith(" anniversary"):
-                        name = name[:-12].strip()
-                        event_type = 'Anniversary'
-                        
+                from greetify.utils import extract_event_details
+                name, event_type, is_explicit_format = extract_event_details(summary_raw)
+
                 # Finally, if it's from contacts and we still couldn't figure it out, assume Birthday
                 if event_type == 'Custom' and is_birthday_cal:
                     event_type = 'Birthday'
+                    
+                # Skip generic calendar events (like festivals, meetings) if they don't look like personal events
+                if event_type == 'Custom' and not is_explicit_format:
+                    continue
                         
                 if is_birthday_cal and not contact_number:
                     clean_name = name.strip().lower()
@@ -250,6 +235,7 @@ def fetch_events_from_google(user):
                         
                     # 3. Try Partial match (fallback) - Is contact name inside the raw calendar summary?
                     if not contact_number:
+                        summary_lower = summary_raw.lower()
                         for c_name, c_phone in contact_phone_map_name.items():
                             if c_name and len(c_name) > 2 and c_name in summary_lower:
                                 contact_number = c_phone
@@ -264,21 +250,25 @@ def fetch_events_from_google(user):
                 fetched_google_ids.append(master_id)
 
                 source_val = 'GOOGLE_CONTACTS' if is_birthday_cal else 'GOOGLE_CALENDAR'
+                try:
+                    dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                except ValueError:
+                    continue
 
                 # Check if event already exists by master_id, or fallback to instance id for backward compatibility
-                existing_event = Event.objects.filter(user=user, google_event_id=master_id).first()
+                existing_event = existing_by_google_id.get(master_id)
                 if not existing_event:
-                    existing_event = Event.objects.filter(user=user, google_event_id=google_id).first()
+                    existing_event = existing_by_google_id.get(google_id)
                     
-                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-                
                 if not existing_event:
                     # Deduplicate: If an event with the same name, date, and type exists (e.g. from a different calendar/contact)
-                    existing_event = Event.objects.filter(user=user, name__iexact=name, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
-                
-                if not existing_event and contact_number:
-                    # Deduplicate: If an event with the same contact number, date, and type exists
-                    existing_event = Event.objects.filter(user=user, contact_number=contact_number, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
+                    clean_name_match = name.strip().lower()
+                    if event_type in ['Birthday', 'Anniversary']:
+                        existing_event = existing_by_name_md.get((clean_name_match, dt.month, dt.day))
+                        if not existing_event and contact_number:
+                            existing_event = existing_by_phone_md.get((contact_number, dt.month, dt.day))
+                    else:
+                        existing_event = existing_by_name_ymd.get((clean_name_match, dt.year, dt.month, dt.day))
 
                 if not existing_event:
                     event = Event.objects.create(
@@ -294,20 +284,19 @@ def fetch_events_from_google(user):
                     )
                     synced_count += 1
                     
-                    # Generate wish automatically for the fetched event
-                    try:
-                        from greetify.services.ai_service import generate_wish
-                        from greetify.models import WishHistory
-                        generated_text = generate_wish(event, 'EN')
-                        WishHistory.objects.create(
-                            user=user,
-                            event=event,
-                            generated_text=generated_text,
-                            language='EN',
-                            status='GENERATED'
-                        )
-                    except Exception as e:
-                        print(f"Failed to auto-generate wish for synced event: {e}")
+                    if master_id:
+                        existing_by_google_id[master_id] = event
+                    clean_name_match = name.strip().lower()
+                    if event_type in ['Birthday', 'Anniversary']:
+                        existing_by_name_md[(clean_name_match, dt.month, dt.day)] = event
+                        if contact_number:
+                            existing_by_phone_md[(contact_number, dt.month, dt.day)] = event
+                    else:
+                        existing_by_name_ymd[(clean_name_match, dt.year, dt.month, dt.day)] = event
+                    
+                    # Generate wish automatically for the fetched event in the background
+                    from greetify.views import async_generate_wish
+                    async_generate_wish(user.id, event.id)
                 else:
                     # If it exists, update it if name or date changed
                     has_changes = False

@@ -21,11 +21,36 @@ import jwt
 from rest_framework import mixins, filters
 from rest_framework.pagination import PageNumberPagination
 from django.db.models import Q
+from django.db import transaction
+import threading
 
 class StandardResultsSetPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = 'page_size'
     max_page_size = 100
+
+def async_generate_wish(user_id, event_id):
+    def run():
+        try:
+            from greetify.models import Event, WishHistory
+            from greetify.services.ai_service import generate_wish
+            event = Event.objects.get(id=event_id)
+            generated_text = generate_wish(event, 'EN')
+            WishHistory.objects.create(
+                user_id=user_id,
+                event=event,
+                generated_text=generated_text,
+                language='EN',
+                status='GENERATED'
+            )
+        except Exception as e:
+            print(f"Failed to auto-generate wish in background: {e}")
+        finally:
+            from django.db import connection
+            connection.close()
+    
+    threading.Thread(target=run, daemon=True).start()
+
 @api_view(['GET'])
 def google_auth_url(request):
     """Returns the URL for Google OAuth login."""
@@ -46,6 +71,7 @@ def google_auth_url(request):
     return Response({'url': url})
 
 @api_view(['POST'])
+@transaction.atomic
 def google_auth_callback(request):
     """Handles the callback and logs in the user."""
     code = request.data.get('code')
@@ -115,6 +141,7 @@ def google_auth_callback(request):
     })
 
 @api_view(['POST'])
+@transaction.atomic
 def google_auth_mobile(request):
     """Handles login for mobile apps using direct access_token."""
     access_token = request.data.get('access_token')
@@ -170,6 +197,7 @@ def google_auth_mobile(request):
 class AppleAuthVerifyView(APIView):
     permission_classes = [AllowAny]
 
+    @transaction.atomic
     def post(self, request, *args, **kwargs):
         serializer = AppleAuthSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -283,20 +311,24 @@ def get_dashboard(request):
     upcoming_events_list = []
     
     for event in all_events:
-        try:
-            # Calculate next occurrence in the current year
-            next_date = event.date.replace(year=today.year)
-            if next_date < today:
-                # If it already passed this year, next occurrence is next year
-                next_date = next_date.replace(year=today.year + 1)
-        except ValueError:
-            # Handle leap year (Feb 29) on non-leap years
-            if event.date.month == 2 and event.date.day == 29:
-                next_date = datetime.date(today.year, 3, 1)
+        if event.event_type in ['Birthday', 'Anniversary']:
+            try:
+                # Calculate next occurrence in the current year
+                next_date = event.date.replace(year=today.year)
                 if next_date < today:
-                    next_date = datetime.date(today.year + 1, 3, 1)
-            else:
-                continue
+                    # If it already passed this year, next occurrence is next year
+                    next_date = next_date.replace(year=today.year + 1)
+            except ValueError:
+                # Handle leap year (Feb 29) on non-leap years
+                if event.date.month == 2 and event.date.day == 29:
+                    next_date = datetime.date(today.year, 3, 1)
+                    if next_date < today:
+                        next_date = datetime.date(today.year + 1, 3, 1)
+                else:
+                    continue
+        else:
+            # One-time event uses exact original date
+            next_date = event.date
                 
         days_until = (next_date - today).days
         
@@ -388,15 +420,14 @@ class EventViewSet(viewsets.ModelViewSet):
         distinct_types = qs.values_list('event_type', flat=True).distinct()
         
         cleaned_types = set()
-        birthday_synonyms = ['birthday', 'bday', 'birtday', 'birth', 'happybirthday', 'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth']
-        anniversary_synonyms = ['anniversary', 'marriageanniversary', 'happyanniversary', 'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi']
+        from greetify.utils import BIRTHDAY_SYNONYMS, ANNIVERSARY_SYNONYMS
         
         for t in distinct_types:
             if not t: continue
             val_lower = t.lower().replace(" ", "").replace("'", "")
-            if val_lower in birthday_synonyms:
+            if val_lower in BIRTHDAY_SYNONYMS:
                 cleaned_types.add('Birthday')
-            elif val_lower in anniversary_synonyms:
+            elif val_lower in ANNIVERSARY_SYNONYMS:
                 cleaned_types.add('Anniversary')
             else:
                 cleaned_types.add(" ".join(t.split()).title())
@@ -419,17 +450,16 @@ class EventViewSet(viewsets.ModelViewSet):
         
         if event_type:
             val_lower = event_type.lower().replace(" ", "").replace("'", "")
-            birthday_synonyms = ['birthday', 'bday', 'birtday', 'birth', 'happybirthday', 'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth']
-            anniversary_synonyms = ['anniversary', 'marriageanniversary', 'happyanniversary', 'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi']
+            from greetify.utils import BIRTHDAY_SYNONYMS, ANNIVERSARY_SYNONYMS
             
-            if val_lower in birthday_synonyms:
+            if val_lower in BIRTHDAY_SYNONYMS:
                 q_objects = Q(event_type__iexact='Birthday')
-                for syn in birthday_synonyms:
+                for syn in BIRTHDAY_SYNONYMS:
                     q_objects |= Q(event_type__iexact=syn)
                 queryset = queryset.filter(q_objects)
-            elif val_lower in anniversary_synonyms:
+            elif val_lower in ANNIVERSARY_SYNONYMS:
                 q_objects = Q(event_type__iexact='Anniversary')
-                for syn in anniversary_synonyms:
+                for syn in ANNIVERSARY_SYNONYMS:
                     q_objects |= Q(event_type__iexact=syn)
                 queryset = queryset.filter(q_objects)
             else:
@@ -492,17 +522,7 @@ class EventViewSet(viewsets.ModelViewSet):
         push_contact_to_google(self.request.user, event)
         
         # Automatically generate a wish upon event creation
-        try:
-            generated_text = generate_wish(event, 'EN')
-            WishHistory.objects.create(
-                user=self.request.user,
-                event=event,
-                generated_text=generated_text,
-                language='EN',
-                status='GENERATED'
-            )
-        except Exception as e:
-            print(f"Failed to auto-generate wish: {e}")
+        async_generate_wish(self.request.user.id, event.id)
 
     def perform_update(self, serializer):
         event = serializer.save()
@@ -513,11 +533,17 @@ class EventViewSet(viewsets.ModelViewSet):
         from .models import DeletedEventLog
         
         if instance.google_event_id:
-            delete_event_from_google(self.request.user, instance.google_event_id)
+            try:
+                delete_event_from_google(self.request.user, instance.google_event_id)
+            except Exception as e:
+                print(f"Failed to delete event from google: {e}")
             DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.google_event_id)
             
         if instance.google_contact_id:
-            delete_contact_from_google(self.request.user, instance.google_contact_id)
+            try:
+                delete_contact_from_google(self.request.user, instance.google_contact_id)
+            except Exception as e:
+                print(f"Failed to delete contact from google: {e}")
             DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.google_contact_id)
             
         if instance.apple_event_id:
@@ -670,10 +696,28 @@ class AppleSyncView(APIView):
             if given_name:
                 contact_map[given_name.lower()] = contact_info
 
+        # Pre-fetch existing events to avoid N+1 queries during sync
+        existing_events = list(Event.objects.filter(user=user))
+        existing_by_apple_id = {e.apple_event_id: e for e in existing_events if e.apple_event_id}
+        existing_by_name_md = {}
+        existing_by_name_ymd = {}
+        existing_by_phone_md = {}
+        
+        for e in existing_events:
+            name_lower = e.name.strip().lower()
+            if e.event_type in ['Birthday', 'Anniversary']:
+                existing_by_name_md[(name_lower, e.date.month, e.date.day)] = e
+                if e.contact_number:
+                    existing_by_phone_md[(e.contact_number, e.date.month, e.date.day)] = e
+            else:
+                existing_by_name_ymd[(name_lower, e.date.year, e.date.month, e.date.day)] = e
+
+        from greetify.models import WishHistory
+        existing_wishes_event_ids = set(WishHistory.objects.filter(user=user).values_list('event_id', flat=True))
+
         # Process Calendar Events
         processed_external_ids = set()
         for event_info in events_data:
-            import re
             external_id = event_info.get('id')
             if external_id and external_id in deleted_ids:
                 continue
@@ -694,54 +738,9 @@ class AppleSyncView(APIView):
             if not date_str:
                 continue
 
-            summary_lower = title.lower().replace(" ", "").replace("'", "")
+            from greetify.utils import extract_event_details
+            name, event_type, is_explicit_format = extract_event_details(title)
             
-            birthday_synonyms = [
-                'birthday', 'bday', 'birtday', 'birth', 'happybirthday',
-                'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth'
-            ]
-            anniversary_synonyms = [
-                'anniversary', 'marriageanniversary', 'happyanniversary',
-                'salgirah', 'saalgirah', 'shadikisalgirah', 'lagnatithi', 'lagnatidhi'
-            ]
-            
-            event_type = 'Custom'
-            if any(syn in summary_lower for syn in birthday_synonyms):
-                event_type = 'Birthday'
-            elif any(syn in summary_lower for syn in anniversary_synonyms):
-                event_type = 'Anniversary'
-
-            # Extract name from title (e.g. "Pranjal's Birthday" or "Pranjal’s Birthday" -> "Pranjal")
-            name = title
-            match = re.search(r"^(.*?)['’]s\s+(.+)$", title, re.IGNORECASE)
-            is_explicit_format = False
-            
-            if match:
-                name = match.group(1).strip()
-                extracted_type = match.group(2).strip().title()
-                is_explicit_format = True
-                if event_type == 'Custom':
-                    event_type = extracted_type
-            else:
-                if name.lower().endswith(" birthday"):
-                    name = name[:-9].strip()
-                    is_explicit_format = True
-                elif name.lower().endswith(" anniversary"):
-                    name = name[:-12].strip()
-                    is_explicit_format = True
-                    
-                # Extra cleanup just in case
-                if name.endswith("'s") or name.endswith("’s"):
-                    name = name[:-2].strip()
-                    
-            # Allow common personal events even without the 's format
-            personal_event_keywords = [
-                'house warming', 'housewarming', 'exam', 'test', 'wedding', 'graduation',
-                'baby shower', 'babyshower', 'engagement', 'farewell', 'retirement'
-            ]
-            if any(keyword in summary_lower for keyword in personal_event_keywords):
-                is_explicit_format = True
-                    
             # Skip generic calendar events (like festivals, meetings) if they don't look like personal events
             if event_type == 'Custom' and not is_explicit_format:
                 continue
@@ -756,8 +755,9 @@ class AppleSyncView(APIView):
                 matched_contact = contact_map[clean_name]
             else:
                 # Try partial match inside the full title
+                title_lower = title.lower()
                 for c_name, c_info in contact_map.items():
-                    if c_name and len(c_name) > 2 and c_name in summary_lower:
+                    if c_name and len(c_name) > 2 and c_name in title_lower:
                         matched_contact = c_info
                         break
                         
@@ -774,14 +774,20 @@ class AppleSyncView(APIView):
                 final_notes = f"{final_notes}\n{contact_notes}".strip()
 
             source_val = 'APPLE_CONTACTS' if contact_number else 'APPLE_CALENDAR'
-
-            existing_event = Event.objects.filter(user=user, apple_event_id=external_id).first()
-            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            try:
+                dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                continue
             
+            existing_event = existing_by_apple_id.get(external_id)
             if not existing_event:
-                existing_event = Event.objects.filter(user=user, name__iexact=name, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
-            if not existing_event and contact_number:
-                existing_event = Event.objects.filter(user=user, contact_number=contact_number, date__month=dt.month, date__day=dt.day, event_type=event_type).first()
+                clean_name_match = name.strip().lower()
+                if event_type in ['Birthday', 'Anniversary']:
+                    existing_event = existing_by_name_md.get((clean_name_match, dt.month, dt.day))
+                    if not existing_event and contact_number:
+                        existing_event = existing_by_phone_md.get((contact_number, dt.month, dt.day))
+                else:
+                    existing_event = existing_by_name_ymd.get((clean_name_match, dt.year, dt.month, dt.day))
 
             if not existing_event:
                 event = Event.objects.create(
@@ -794,6 +800,16 @@ class AppleSyncView(APIView):
                     notes_for_ai=final_notes,
                     source=source_val
                 )
+                
+                if external_id:
+                    existing_by_apple_id[external_id] = event
+                clean_name_match = name.strip().lower()
+                if event_type in ['Birthday', 'Anniversary']:
+                    existing_by_name_md[(clean_name_match, dt.month, dt.day)] = event
+                    if contact_number:
+                        existing_by_phone_md[(contact_number, dt.month, dt.day)] = event
+                else:
+                    existing_by_name_ymd[(clean_name_match, dt.year, dt.month, dt.day)] = event
             else:
                 is_manual = existing_event.source == 'APP'
                 if not is_manual:
@@ -814,21 +830,8 @@ class AppleSyncView(APIView):
                 event = existing_event
                 
             # Auto-generate wish if it doesn't have one yet!
-            from greetify.models import WishHistory
-            has_wish = WishHistory.objects.filter(user=user, event=event).exists()
-            if not has_wish:
-                try:
-                    from greetify.services.ai_service import generate_wish
-                    generated_text = generate_wish(event, 'EN')
-                    WishHistory.objects.create(
-                        user=user,
-                        event=event,
-                        generated_text=generated_text,
-                        language='EN',
-                        status='GENERATED'
-                    )
-                except Exception as e:
-                    print(f"Failed to auto-generate wish for Apple synced event: {e}")
+            if event.id not in existing_wishes_event_ids:
+                async_generate_wish(user.id, event.id)
 
         return Response({
             "message": "Apple data synced successfully",
