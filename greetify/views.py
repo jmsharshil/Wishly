@@ -38,7 +38,19 @@ def async_generate_wish(user_id, event_id):
         try:
             from greetify.models import Event, WishHistory
             from greetify.services.ai_service import generate_wish
+            from django.utils import timezone
+            
             event = Event.objects.get(id=event_id)
+            today = timezone.now().date()
+            
+            # Only generate if the event is happening today
+            if event.event_type in ['Birthday', 'Anniversary']:
+                if event.date.month != today.month or event.date.day != today.day:
+                    return
+            else:
+                if event.date != today:
+                    return
+                    
             generated_text = generate_wish(event, 'EN')
             WishHistory.objects.create(
                 user_id=user_id,
@@ -463,8 +475,9 @@ class EventViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         queryset = Event.objects.filter(user=self.request.user)
         
-        # Exclude past non-recurring events
         today = timezone.now().date()
+        
+        # Exclude past non-recurring events
         queryset = queryset.exclude(
             ~Q(event_type__in=['Birthday', 'Anniversary']) & Q(date__lt=today)
         )
