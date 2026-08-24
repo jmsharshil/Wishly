@@ -357,14 +357,22 @@ def get_dashboard(request):
     upcoming_events_list.sort(key=lambda x: x[0])
     
     events_today_ids = [e.id for e in events_today]
-    events_today_count = len(events_today)
+    
+    # Original count for stats (before removing)
+    total_events_today_count = len(events_today)
     
     # Number of today's events that have a SENT wish
-    wishes_sent_for_today = WishHistory.objects.filter(
+    wishes_sent_for_today_qs = WishHistory.objects.filter(
         user=request.user,
         status='SENT',
         event_id__in=events_today_ids
-    ).values('event').distinct().count()
+    )
+    wishes_sent_for_today = wishes_sent_for_today_qs.values('event').distinct().count()
+    
+    # Remove events with sent wishes from today's list
+    sent_event_ids_today = set(wishes_sent_for_today_qs.values_list('event_id', flat=True))
+    events_today = [e for e in events_today if e.id not in sent_event_ids_today]
+    events_today_count = len(events_today)
     
     # Total wishes sent overall
     total_sent_qs = WishHistory.objects.filter(
@@ -405,7 +413,7 @@ def get_dashboard(request):
     return Response({
         'user_profile': profile_data,
         'limit': {
-            'total_events_today': events_today_count,
+            'total_events_today': total_events_today_count,
             'wishes_sent_today': wishes_sent_for_today,
         },
         'stats': {
@@ -454,6 +462,12 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = Event.objects.filter(user=self.request.user)
+        
+        # Exclude past non-recurring events
+        today = timezone.now().date()
+        queryset = queryset.exclude(
+            ~Q(event_type__in=['Birthday', 'Anniversary']) & Q(date__lt=today)
+        )
         
         # Filter by login provider
         profile, _ = UserProfile.objects.get_or_create(user=self.request.user)
@@ -535,6 +549,18 @@ class EventViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         event = serializer.save(user=self.request.user)
+        
+        # Link existing google_contact_id if phone number matches to prevent changing name/duplicating in Google Contacts
+        if event.contact_number and not event.google_contact_id:
+            existing = Event.objects.filter(
+                user=self.request.user, 
+                contact_number=event.contact_number, 
+                google_contact_id__isnull=False
+            ).first()
+            if existing:
+                event.google_contact_id = existing.google_contact_id
+                event.save(update_fields=['google_contact_id'])
+                
         push_event_to_google(self.request.user, event)
         push_contact_to_google(self.request.user, event)
         

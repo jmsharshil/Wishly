@@ -1,8 +1,8 @@
 import re
 
 BIRTHDAY_SYNONYMS = [
-    'birthday', 'bday', 'birtday', 'birth', 'happybirthday',
-    'janamdin', 'janmadin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth'
+    'birthday', 'bday', "b'day", 'birtday', 'birth', 'happybirthday',
+    'janamdin', 'janmadin', 'janmdin', 'janmdivas', 'janamdivas', 'varshgaanth', 'varshganth'
 ]
 
 ANNIVERSARY_SYNONYMS = [

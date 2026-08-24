@@ -57,6 +57,18 @@ class EventSerializer(serializers.ModelSerializer):
             return obj.user.profile.profile_picture
         return None
 
+    def validate_contact_number(self, value):
+        if value:
+            import re
+            # Extract only the digits
+            digits = re.sub(r'\D', '', value)
+            
+            if len(digits) < 10:
+                raise serializers.ValidationError("Contact number must be at least 10 digits.")
+            
+            return value.strip()
+        return value
+
     def validate_event_type(self, value):
         if not value:
             return value
