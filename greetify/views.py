@@ -337,10 +337,18 @@ def get_dashboard(request):
         if event.event_type in ['Birthday', 'Anniversary']:
             try:
                 # Calculate next occurrence in the current year
-                next_date = event.date.replace(year=today.year)
+                try:
+                    next_date = event.date.replace(year=today.year)
+                except ValueError:
+                    # Handle Feb 29 on non-leap years (fallback to Feb 28)
+                    next_date = event.date.replace(year=today.year, month=2, day=28)
+                    
                 if next_date < today:
                     # If it already passed this year, next occurrence is next year
-                    next_date = next_date.replace(year=today.year + 1)
+                    try:
+                        next_date = next_date.replace(year=today.year + 1)
+                    except ValueError:
+                        next_date = next_date.replace(year=today.year + 1, month=2, day=28)
             except ValueError:
                 # Handle leap year (Feb 29) on non-leap years
                 if event.date.month == 2 and event.date.day == 29:
@@ -477,9 +485,43 @@ class EventViewSet(viewsets.ModelViewSet):
         
         today = timezone.now().date()
         
-        # Exclude past non-recurring events
-        queryset = queryset.exclude(
-            ~Q(event_type__in=['Birthday', 'Anniversary']) & Q(date__lt=today)
+        # Annotate month, day, year and a 'has_passed' flag to sort by NEXT upcoming occurrence
+        from django.db.models.functions import ExtractMonth, ExtractDay, ExtractYear
+        from django.db.models import Case, When, Value, IntegerField, F, BooleanField
+        
+        queryset = queryset.annotate(
+            month=ExtractMonth('date'),
+            day=ExtractDay('date'),
+            year=ExtractYear('date')
+        )
+        
+        # 1. Flag if a recurring event has passed THIS year
+        queryset = queryset.annotate(
+            has_passed=Case(
+                When(month__lt=today.month, then=Value(1)),
+                When(month=today.month, day__lt=today.day, then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        )
+        
+        # 2. Flag if a NON-RECURRING event is entirely in the past (to push it to the bottom)
+        queryset = queryset.annotate(
+            is_past_event=Case(
+                When(~Q(event_type__in=['Birthday', 'Anniversary']) & Q(date__lt=today), then=Value(1)),
+                default=Value(0),
+                output_field=IntegerField(),
+            )
+        )
+        
+        # 3. Calculate the actual year of the next occurrence for sorting
+        queryset = queryset.annotate(
+            sort_year=Case(
+                When(event_type__in=['Birthday', 'Anniversary'], has_passed=0, then=Value(today.year)),
+                When(event_type__in=['Birthday', 'Anniversary'], has_passed=1, then=Value(today.year + 1)),
+                default=F('year'),
+                output_field=IntegerField(),
+            )
         )
         
         # Filter by login provider
@@ -544,7 +586,8 @@ class EventViewSet(viewsets.ModelViewSet):
                 Q(notes_for_ai__icontains=search_query)
             )
 
-        return queryset.order_by('date')
+        # Sort strictly by: Upcoming first (0), Past later (1), then chronological date
+        return queryset.order_by('is_past_event', 'sort_year', 'month', 'day')
 
     def list(self, request, *args, **kwargs):
         response = super().list(request, *args, **kwargs)
