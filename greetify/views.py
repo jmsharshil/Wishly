@@ -758,10 +758,10 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
             if time_filter == 'today':
                 queryset = queryset.filter(created_at__gte=today_start)
             elif time_filter == 'this_week':
-                start_of_week = today_start - timedelta(days=now.weekday())
+                start_of_week = today_start - timedelta(days=7)
                 queryset = queryset.filter(created_at__gte=start_of_week)
             elif time_filter == 'this_month':
-                start_of_month = today_start.replace(day=1)
+                start_of_month = today_start - timedelta(days=30)
                 queryset = queryset.filter(created_at__gte=start_of_month)
                 
         if search_query:
