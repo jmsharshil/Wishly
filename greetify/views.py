@@ -852,6 +852,13 @@ class AppleSyncView(APIView):
             notes_lower = notes.lower()
             
             is_holiday_or_meeting = False
+            
+            calendar_info = event_info.get('calendar', {})
+            cal_title = calendar_info.get('title', '').lower()
+            
+            if 'holiday' in cal_title or 'festival' in cal_title:
+                is_holiday_or_meeting = True
+                
             if 'holiday' in notes_lower or 'observance' in notes_lower:
                 is_holiday_or_meeting = True
                 
