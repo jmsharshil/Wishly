@@ -751,14 +751,18 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
         search_query = self.request.query_params.get('search')
         
         if time_filter:
-            today = timezone.now().date()
+            time_filter = time_filter.lower().replace(' ', '_')
+            now = timezone.now()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            
             if time_filter == 'today':
-                queryset = queryset.filter(created_at__date=today)
+                queryset = queryset.filter(created_at__gte=today_start)
             elif time_filter == 'this_week':
-                start_of_week = today - timedelta(days=today.weekday())
-                queryset = queryset.filter(created_at__date__gte=start_of_week)
+                start_of_week = today_start - timedelta(days=now.weekday())
+                queryset = queryset.filter(created_at__gte=start_of_week)
             elif time_filter == 'this_month':
-                queryset = queryset.filter(created_at__year=today.year, created_at__month=today.month)
+                start_of_month = today_start.replace(day=1)
+                queryset = queryset.filter(created_at__gte=start_of_month)
                 
         if search_query:
             # Search across generated text or event name
@@ -767,7 +771,7 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
                 Q(event__name__icontains=search_query)
             )
                 
-        return queryset.order_by('created_at')
+        return queryset.order_by('-created_at')
 
 class AppleSyncView(APIView):
     permission_classes = [IsAuthenticated]
