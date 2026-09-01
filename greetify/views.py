@@ -831,12 +831,15 @@ class AppleSyncView(APIView):
                 processed_external_ids.add(external_id)
                 
             title = event_info.get('title', 'Untitled Event')
+            end_date = event_info.get('endDate')
             start_date = event_info.get('startDate')
             notes = event_info.get('notes', '')
 
             date_str = None
-            if start_date:
-                date_str = start_date[:10]  # Extract YYYY-MM-DD from ISO string
+            if end_date:
+                date_str = end_date[:10]  # Extract YYYY-MM-DD from ISO string (endDate usually has the correct day for all-day events in UTC)
+            elif start_date:
+                date_str = start_date[:10]
 
             if not date_str:
                 continue
@@ -844,8 +847,19 @@ class AppleSyncView(APIView):
             from greetify.utils import extract_event_details
             name, event_type, is_explicit_format = extract_event_details(title)
             
-            # Skip generic calendar events (like festivals, meetings) if they don't look like personal events
-            if event_type == 'Custom' and not is_explicit_format:
+            # Ignore holidays, observances, and meetings
+            title_lower = title.lower()
+            notes_lower = notes.lower()
+            
+            is_holiday_or_meeting = False
+            if 'holiday' in notes_lower or 'observance' in notes_lower:
+                is_holiday_or_meeting = True
+                
+            ignore_keywords = ['meeting', 'sync', 'call', 'appointment', 'holiday', 'festival', 'national day']
+            if any(kw in title_lower for kw in ignore_keywords):
+                is_holiday_or_meeting = True
+                
+            if is_holiday_or_meeting:
                 continue
 
             # Find phone number and notes from contact
