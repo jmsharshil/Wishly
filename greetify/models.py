@@ -43,9 +43,19 @@ class Event(models.Model):
     google_contact_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID from Google Contacts (People API)")
     apple_event_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID from Apple Calendar")
     apple_contact_id = models.CharField(max_length=255, blank=True, null=True, help_text="ID from Apple Contacts")
+    relationship = models.CharField(max_length=100, blank=True, null=True, help_text="Relationship to the user (e.g., Friend, Mother)")
 
     def __str__(self):
         return f"{self.name} - {self.event_type} on {self.date}"
+
+
+class EventNote(models.Model):
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='notes')
+    text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Note for {self.event.name} at {self.created_at}"
 
 
 class WishHistory(models.Model):

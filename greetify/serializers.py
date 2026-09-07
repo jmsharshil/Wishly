@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import UserProfile, Event, WishHistory
+from django.utils import timezone
+from .models import UserProfile, Event, WishHistory, EventNote
 
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
@@ -17,10 +18,23 @@ class FlexibleDateField(serializers.DateField):
             value = value.replace('–', '-').replace('—', '-')
         return super().to_internal_value(value)
 
+class EventNoteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EventNote
+        fields = ('id', 'text', 'created_at')
+        read_only_fields = ('id', 'created_at')
+
 class EventSerializer(serializers.ModelSerializer):
     generated_wish_preview = serializers.SerializerMethodField()
     generated_wish_id = serializers.SerializerMethodField()
     user_profile_picture = serializers.SerializerMethodField()
+    age = serializers.SerializerMethodField()
+    notes = EventNoteSerializer(many=True, read_only=True)
+    new_notes = serializers.ListField(
+        child=serializers.CharField(), 
+        write_only=True, 
+        required=False
+    )
     
     date = FlexibleDateField(
         input_formats=[
@@ -38,6 +52,18 @@ class EventSerializer(serializers.ModelSerializer):
         model = Event
         fields = '__all__'
         read_only_fields = ('user',)
+
+    def get_age(self, obj):
+        if not obj.date:
+            return None
+        today = timezone.now().date()
+        try:
+            orig_year = obj.date.year if not isinstance(obj.date, str) else int(obj.date[:4])
+            if orig_year < today.year and obj.event_type in ['Birthday', 'Anniversary']:
+                return today.year - orig_year
+        except Exception:
+            pass
+        return None
 
     def get_generated_wish_preview(self, obj):
         # Fetch the most recent wish generated for this event

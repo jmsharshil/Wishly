@@ -604,7 +604,14 @@ class EventViewSet(viewsets.ModelViewSet):
         return Response(self._get_cleaned_filter_types(request.user))
 
     def perform_create(self, serializer):
+        new_notes = serializer.validated_data.pop('new_notes', [])
         event = serializer.save(user=self.request.user)
+        
+        for text in new_notes:
+            if text.strip():
+                from .models import EventNote
+                EventNote.objects.create(event=event, text=text.strip())
+
         
         # Link existing google_contact_id if phone number matches to prevent changing name/duplicating in Google Contacts
         if event.contact_number and not event.google_contact_id:
@@ -624,7 +631,14 @@ class EventViewSet(viewsets.ModelViewSet):
         async_generate_wish(self.request.user.id, event.id)
 
     def perform_update(self, serializer):
+        new_notes = serializer.validated_data.pop('new_notes', [])
         event = serializer.save()
+        
+        for text in new_notes:
+            if text.strip():
+                from .models import EventNote
+                EventNote.objects.create(event=event, text=text.strip())
+                
         push_event_to_google(self.request.user, event)
         push_contact_to_google(self.request.user, event)
 
@@ -652,6 +666,46 @@ class EventViewSet(viewsets.ModelViewSet):
             DeletedEventLog.objects.get_or_create(user=self.request.user, external_id=instance.apple_contact_id)
             
         instance.delete()
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_contact_list(request):
+    from .services.google_service import get_google_contacts_list
+    result = get_google_contacts_list(request.user)
+    if "error" in result:
+        return Response(result, status=status.HTTP_400_BAD_REQUEST)
+    return Response(result)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_event_types(request):
+    # Base event types
+    event_types = ['Birthday', 'Anniversary', 'Meeting', 'Custom']
+    # Merge with dynamic types from user
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    provider = profile.last_login_provider
+    qs = Event.objects.filter(user=request.user)
+    if provider == 'GOOGLE':
+        qs = qs.exclude(source__startswith='APPLE')
+    elif provider == 'APPLE':
+        qs = qs.exclude(source__startswith='GOOGLE')
+        
+    distinct_types = qs.values_list('event_type', flat=True).distinct()
+    from greetify.utils import BIRTHDAY_SYNONYMS, ANNIVERSARY_SYNONYMS
+    
+    cleaned_types = set(event_types)
+    for t in distinct_types:
+        if not t: continue
+        val_lower = t.lower().replace(" ", "").replace("'", "")
+        if val_lower in BIRTHDAY_SYNONYMS:
+            cleaned_types.add('Birthday')
+        elif val_lower in ANNIVERSARY_SYNONYMS:
+            cleaned_types.add('Anniversary')
+        else:
+            cleaned_types.add(" ".join(t.split()).title())
+            
+    return Response(sorted(list(cleaned_types)))
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])

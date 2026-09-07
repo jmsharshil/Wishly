@@ -22,5 +22,8 @@ urlpatterns = [
     path('wishes/<int:pk>/edit/', views.edit_wish, name='edit-wish'),
     path('wishes/<int:pk>/mark-sent/', views.mark_wish_sent, name='mark-wish-sent'),
     
+    path('event-types/', views.get_event_types, name='event-types'),
+    path('contacts/', views.get_contact_list, name='contacts'),
+    
     path('', include(router.urls)),
 ]

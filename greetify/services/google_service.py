@@ -142,6 +142,55 @@ def fetch_events_from_google(user):
             print(f"Failed to fetch contacts for phone mapping: {e}")
 
     sync_success = True
+
+def get_google_contacts_list(user):
+    creds = get_google_credentials(user)
+    people_service = _get_google_people_service(user, creds=creds)
+    if not people_service:
+        return {"error": "no_account_linked", "message": "Google account is not linked or token is missing."}
+
+    contacts_list = []
+    try:
+        results = people_service.people().connections().list(
+            resourceName='people/me',
+            personFields='names,phoneNumbers,photos',
+            pageSize=1000
+        ).execute()
+        
+        connections = results.get('connections', [])
+        for person in connections:
+            names = person.get('names', [])
+            phones = person.get('phoneNumbers', [])
+            photos = person.get('photos', [])
+            
+            name_str = names[0].get('displayName', '').strip() if names else ''
+            phone_val = phones[0].get('value', '') if phones else ''
+            photo_url = photos[0].get('url', '') if photos else ''
+            
+            if phone_val:
+                import re
+                phone_val = re.sub(r'[^\d+]', '', phone_val)
+                
+            if name_str or phone_val:
+                contacts_list.append({
+                    'name': name_str,
+                    'phone': phone_val,
+                    'profile_picture': photo_url
+                })
+                
+        return {"contacts": contacts_list}
+    except Exception as e:
+        from googleapiclient.errors import HttpError
+        from google.auth.exceptions import RefreshError
+        if isinstance(e, HttpError) and e.resp.status in [401, 403]:
+            _save_creds_if_refreshed(user, creds)
+            return {"error": "permission_denied", "message": "Permission denied."}
+        if isinstance(e, RefreshError):
+            _save_creds_if_refreshed(user, creds)
+            return {"error": "permission_denied", "message": "Session expired."}
+        return {"error": "unknown_error", "message": str(e)}
+
+
     
     # Pre-fetch existing events to avoid N+1 queries during sync
     existing_events = list(Event.objects.filter(user=user))
