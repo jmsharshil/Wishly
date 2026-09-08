@@ -29,7 +29,7 @@ from concurrent.futures import ThreadPoolExecutor
 ai_executor = ThreadPoolExecutor(max_workers=5)
 
 class StandardResultsSetPagination(PageNumberPagination):
-    page_size = 50
+    page_size = 20
     page_size_query_param = 'page_size'
     max_page_size = 100
 
@@ -430,6 +430,22 @@ def get_dashboard(request):
     
     recent_wishes_data = WishHistorySerializer(recent_wishes_list, many=True).data
 
+    # Add paginated events list to the dashboard response
+    viewset = EventViewSet()
+    viewset.request = request
+    all_events_qs = viewset.get_queryset()
+    
+    paginator = StandardResultsSetPagination()
+    paginated_events = paginator.paginate_queryset(all_events_qs, request)
+    all_events_data = EventSerializer(paginated_events, many=True).data
+    
+    all_events_paginated = {
+        'count': paginator.page.paginator.count,
+        'next': paginator.get_next_link(),
+        'previous': paginator.get_previous_link(),
+        'results': all_events_data
+    }
+
     return Response({
         'user_profile': profile_data,
         'limit': {
@@ -443,7 +459,8 @@ def get_dashboard(request):
         },
         'today_events': events_today_data,
         'upcoming_events': upcoming_events_data,
-        'recent_wishes': recent_wishes_data
+        'recent_wishes': recent_wishes_data,
+        'all_events': all_events_paginated
     })
 
 class EventViewSet(viewsets.ModelViewSet):
@@ -1017,3 +1034,60 @@ class AppleSyncView(APIView):
             "events_synced": len(events_data)
         }, status=status.HTTP_200_OK)
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_event_types(request):
+    """Returns a list of all distinct event types created by this user."""
+    viewset = EventViewSet()
+    viewset.request = request
+    return Response(viewset._get_cleaned_filter_types(request.user))
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_contact_list(request):
+    """Returns a deduplicated list of contacts (name, phone, picture) extracted from the user's events."""
+    search_query = request.query_params.get('search', '').lower()
+    
+    events = Event.objects.filter(user=request.user)
+    
+    if search_query:
+        events = events.filter(
+            Q(name__icontains=search_query) | 
+            Q(contact_number__icontains=search_query)
+        )
+        
+    # Get contacts with numbers
+    contacts_data = events.exclude(contact_number__isnull=True).exclude(contact_number='').values(
+        'name', 'contact_number', 'profile_picture'
+    )
+    
+    unique_contacts = {}
+    for c in contacts_data:
+        key = (c['name'].strip().lower(), c['contact_number'])
+        if key not in unique_contacts:
+            unique_contacts[key] = c
+            
+    # Include people without numbers as well
+    no_number_contacts = events.filter(Q(contact_number__isnull=True) | Q(contact_number='')).values(
+        'name', 'profile_picture'
+    )
+    
+    for c in no_number_contacts:
+        key = (c['name'].strip().lower(), '')
+        if key not in unique_contacts:
+            unique_contacts[key] = {
+                'name': c['name'],
+                'contact_number': None,
+                'profile_picture': c['profile_picture']
+            }
+            
+    result = list(unique_contacts.values())
+    
+    # Sort alphabetically
+    result.sort(key=lambda x: x['name'].lower())
+    
+    # Setup pagination
+    paginator = StandardResultsSetPagination()
+    # paginator supports lists directly
+    paginated_list = paginator.paginate_queryset(result, request)
+    return paginator.get_paginated_response(paginated_list)
