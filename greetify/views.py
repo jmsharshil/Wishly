@@ -970,6 +970,13 @@ class AppleSyncView(APIView):
             if any(kw in title_lower for kw in ignore_keywords):
                 is_holiday_or_meeting = True
                 
+            # Ignore generic events (like festivals, reminders) that are not explicitly personal events
+            # and don't match any contact.
+            if event_type == 'Custom' and not is_explicit_format:
+                # We will check if it matches a contact below. If not, we'll skip it.
+                # But for now, let's set a flag so we can skip it later if no contact is matched.
+                pass
+                
             if is_holiday_or_meeting:
                 continue
 
@@ -995,6 +1002,11 @@ class AppleSyncView(APIView):
                     contact_number = phones[0]
                 # Some iOS libraries use 'note' (singular) while others use 'notes'
                 contact_notes = matched_contact.get('note', matched_contact.get('notes', ''))
+                
+            # If it's a generic event (like a festival or a reminder) and we couldn't match
+            # it to any contact, skip it! We don't want to sync random Apple calendar events.
+            if not matched_contact and event_type == 'Custom' and not is_explicit_format:
+                continue
                 
             # Combine calendar notes with contact notes
             final_notes = notes
