@@ -432,13 +432,21 @@ def get_dashboard(request):
     elif provider == 'APPLE':
         recent_wishes_qs = recent_wishes_qs.exclude(event__source__startswith='GOOGLE')
         
-    recent_wishes_qs = recent_wishes_qs.order_by('-created_at')[:5]
+    recent_wishes_qs = recent_wishes_qs.order_by('-created_at')[:50]
     
+    unique_recent_wishes = []
+    seen_events = set()
+    for wish in recent_wishes_qs:
+        if wish.event_id not in seen_events:
+            unique_recent_wishes.append(wish)
+            seen_events.add(wish.event_id)
+        if len(unique_recent_wishes) == 5:
+            break
+            
     # Sort them in ascending order by date
-    recent_wishes_list = list(recent_wishes_qs)
-    recent_wishes_list.sort(key=lambda w: w.created_at)
+    unique_recent_wishes.sort(key=lambda w: w.created_at)
     
-    recent_wishes_data = WishHistorySerializer(recent_wishes_list, many=True).data
+    recent_wishes_data = WishHistorySerializer(unique_recent_wishes, many=True).data
 
     # Add paginated events list to the dashboard response
     viewset = EventViewSet()
