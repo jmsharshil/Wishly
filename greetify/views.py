@@ -374,7 +374,7 @@ def get_dashboard(request):
             events_today.append(event)
         elif days_until == 1:
             events_tomorrow.append(event)
-        elif 1 < days_until <= 30:
+        elif days_until > 1:
             upcoming_events_list.append((days_until, event))
             
     upcoming_events_list.sort(key=lambda x: x[0])
@@ -409,13 +409,23 @@ def get_dashboard(request):
     total_sent = total_sent_qs.count()
     
     upcoming_events_count = len(upcoming_events_list)
-    upcoming_events_subset = upcoming_events_list[:5]
-    upcoming_events_qs = [item[1] for item in upcoming_events_subset]
     
-    upcoming_events_data = EventSerializer(upcoming_events_qs, many=True).data
+    paginator = StandardResultsSetPagination()
+    paginated_tuples = paginator.paginate_queryset(upcoming_events_list, request)
+    
+    paginated_qs = [t[1] for t in paginated_tuples]
+    upcoming_events_data = EventSerializer(paginated_qs, many=True).data
+    
     for i, item in enumerate(upcoming_events_data):
-        days_until = upcoming_events_subset[i][0]
+        days_until = paginated_tuples[i][0]
         item['label'] = f"{days_until}d"
+        
+    upcoming_events_paginated = {
+        'count': paginator.page.paginator.count,
+        'next': paginator.get_next_link(),
+        'previous': paginator.get_previous_link(),
+        'results': upcoming_events_data
+    }
     
     events_today_data = EventSerializer(events_today, many=True).data
         
@@ -448,22 +458,6 @@ def get_dashboard(request):
     
     recent_wishes_data = WishHistorySerializer(unique_recent_wishes, many=True).data
 
-    # Add paginated events list to the dashboard response
-    viewset = EventViewSet()
-    viewset.request = request
-    all_events_qs = viewset.get_queryset()
-    
-    paginator = StandardResultsSetPagination()
-    paginated_events = paginator.paginate_queryset(all_events_qs, request)
-    all_events_data = EventSerializer(paginated_events, many=True).data
-    
-    all_events_paginated = {
-        'count': paginator.page.paginator.count,
-        'next': paginator.get_next_link(),
-        'previous': paginator.get_previous_link(),
-        'results': all_events_data
-    }
-
     return Response({
         'user_profile': profile_data,
         'limit': {
@@ -477,9 +471,8 @@ def get_dashboard(request):
         },
         'today_events': events_today_data,
         'tomorrow_events': events_tomorrow_data,
-        'upcoming_events': upcoming_events_data,
-        'recent_wishes': recent_wishes_data,
-        'all_events': all_events_paginated
+        'upcoming_events': upcoming_events_paginated,
+        'recent_wishes': recent_wishes_data
     })
 
 class EventViewSet(viewsets.ModelViewSet):
