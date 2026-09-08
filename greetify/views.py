@@ -331,6 +331,7 @@ def get_dashboard(request):
         all_events = all_events.exclude(source__startswith='GOOGLE')
     
     events_today = []
+    events_tomorrow = []
     upcoming_events_list = []
     
     for event in all_events:
@@ -371,7 +372,9 @@ def get_dashboard(request):
         
         if days_until == 0:
             events_today.append(event)
-        elif 0 < days_until <= 30:
+        elif days_until == 1:
+            events_tomorrow.append(event)
+        elif 1 < days_until <= 30:
             upcoming_events_list.append((days_until, event))
             
     upcoming_events_list.sort(key=lambda x: x[0])
@@ -406,10 +409,17 @@ def get_dashboard(request):
     total_sent = total_sent_qs.count()
     
     upcoming_events_count = len(upcoming_events_list)
-    upcoming_events_qs = [item[1] for item in upcoming_events_list[:5]]
+    upcoming_events_subset = upcoming_events_list[:5]
+    upcoming_events_qs = [item[1] for item in upcoming_events_subset]
+    
     upcoming_events_data = EventSerializer(upcoming_events_qs, many=True).data
+    for i, item in enumerate(upcoming_events_data):
+        days_until = upcoming_events_subset[i][0]
+        item['label'] = f"{days_until}d"
     
     events_today_data = EventSerializer(events_today, many=True).data
+        
+    events_tomorrow_data = EventSerializer(events_tomorrow, many=True).data
     
     # Recent Wishes (Last 5)
     recent_wishes_qs = WishHistory.objects.filter(
@@ -458,6 +468,7 @@ def get_dashboard(request):
             'streak': 12, # Mock streak
         },
         'today_events': events_today_data,
+        'tomorrow_events': events_tomorrow_data,
         'upcoming_events': upcoming_events_data,
         'recent_wishes': recent_wishes_data,
         'all_events': all_events_paginated
