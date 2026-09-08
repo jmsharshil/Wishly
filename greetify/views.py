@@ -712,15 +712,6 @@ class EventViewSet(viewsets.ModelViewSet):
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def get_contact_list(request):
-    from .services.google_service import get_google_contacts_list
-    result = get_google_contacts_list(request.user)
-    if "error" in result:
-        return Response(result, status=status.HTTP_400_BAD_REQUEST)
-    return Response(result)
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
 def get_event_types(request):
     # Base event types
     event_types = ['Birthday', 'Anniversary', 'Meeting', 'Custom']
@@ -1105,19 +1096,22 @@ def get_contact_list(request):
         if key not in unique_contacts:
             unique_contacts[key] = c
             
-    # Include people without numbers as well
-    no_number_contacts = events.filter(Q(contact_number__isnull=True) | Q(contact_number='')).values(
-        'name', 'profile_picture'
-    )
-    
-    for c in no_number_contacts:
-        key = (c['name'].strip().lower(), '')
-        if key not in unique_contacts:
-            unique_contacts[key] = {
-                'name': c['name'],
-                'contact_number': None,
-                'profile_picture': c['profile_picture']
-            }
+    # Dynamically fetch Google contacts if the user is a Google user
+    profile, _ = UserProfile.objects.get_or_create(user=request.user)
+    if profile.last_login_provider == 'GOOGLE':
+        from .services.google_service import get_google_contacts_list
+        google_result = get_google_contacts_list(request.user)
+        if "contacts" in google_result:
+            for gc in google_result["contacts"]:
+                phone = gc.get('phone')
+                if phone: # Only include if they have a phone number
+                    key = (gc['name'].strip().lower(), phone)
+                    if key not in unique_contacts:
+                        unique_contacts[key] = {
+                            'name': gc['name'],
+                            'contact_number': phone,
+                            'profile_picture': gc.get('profile_picture', '')
+                        }
             
     result = list(unique_contacts.values())
     
@@ -1126,6 +1120,5 @@ def get_contact_list(request):
     
     # Setup pagination
     paginator = StandardResultsSetPagination()
-    # paginator supports lists directly
     paginated_list = paginator.paginate_queryset(result, request)
     return paginator.get_paginated_response(paginated_list)
