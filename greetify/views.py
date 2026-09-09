@@ -188,7 +188,7 @@ def google_auth_mobile(request):
     if refresh_token:
         profile.google_refresh_token = refresh_token
         
-    if 'picture' in user_info and not profile.profile_picture:
+    if 'picture' in user_info:
         profile.profile_picture = user_info['picture']
         
     profile.last_login_provider = 'GOOGLE'
@@ -307,20 +307,17 @@ def get_profile(request):
         profile_picture = request.data.get('profile_picture')
         
         user_updated = False
-        if first_name is not None:
-            request.user.first_name = first_name
+        if 'first_name' in request.data:
+            request.user.first_name = request.data['first_name'] or ""
             user_updated = True
-        if last_name is not None:
-            request.user.last_name = last_name
+        if 'last_name' in request.data:
+            request.user.last_name = request.data['last_name'] or ""
             user_updated = True
             
         if user_updated:
             request.user.save()
             
-        if profile_picture is not None:
-            profile.profile_picture = profile_picture
-            
-        profile.save()
+        # We no longer allow profile picture edits via API. It comes only from Google/Apple.
         
     serializer = UserProfileSerializer(profile)
     return Response(serializer.data)

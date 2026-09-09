@@ -6,10 +6,12 @@ from .models import UserProfile, Event, WishHistory, EventNote
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.CharField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
 
     class Meta:
         model = UserProfile
-        fields = ('username', 'email', 'profile_picture', 'subscription_tier', 'last_login_provider')
+        fields = ('username', 'email', 'first_name', 'last_name', 'profile_picture', 'subscription_tier', 'last_login_provider')
 
 class FlexibleDateField(serializers.DateField):
     def to_internal_value(self, value):
