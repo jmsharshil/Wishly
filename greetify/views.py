@@ -511,6 +511,59 @@ def get_dashboard(request):
         'recent_wishes': recent_wishes_data
     })
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_note(request, pk):
+    """Deletes a specific EventNote by ID. Only the owner of the note's event can delete it."""
+    from .models import EventNote
+    try:
+        note = EventNote.objects.get(id=pk, event__user=request.user)
+    except EventNote.DoesNotExist:
+        return Response({'error': 'Note not found'}, status=status.HTTP_404_NOT_FOUND)
+    note.delete()
+    return Response({'message': 'Note deleted successfully'}, status=status.HTTP_200_OK)
+
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def edit_notes(request):
+    """
+    Bulk edit multiple notes in one request.
+    Body: [{"id": 1, "text": "New text"}, {"id": 2, "text": "Another text"}, ...]
+    """
+    from .models import EventNote
+    from .serializers import EventNoteSerializer
+    
+    notes_data = request.data
+    if not isinstance(notes_data, list):
+        return Response({'error': 'Expected a list of notes'}, status=status.HTTP_400_BAD_REQUEST)
+    
+    updated = []
+    errors = []
+    
+    for item in notes_data:
+        note_id = item.get('id')
+        text = item.get('text', '').strip()
+        
+        if not note_id:
+            errors.append({'error': 'id is required', 'item': item})
+            continue
+        if not text:
+            errors.append({'id': note_id, 'error': 'text cannot be empty'})
+            continue
+        
+        try:
+            note = EventNote.objects.get(id=note_id, event__user=request.user)
+            note.text = text
+            note.save()
+            updated.append(EventNoteSerializer(note).data)
+        except EventNote.DoesNotExist:
+            errors.append({'id': note_id, 'error': 'Note not found'})
+    
+    return Response({
+        'updated': updated,
+        'errors': errors
+    }, status=status.HTTP_200_OK)
+
 class EventViewSet(viewsets.ModelViewSet):
     """CRUD API for Events."""
     serializer_class = EventSerializer
