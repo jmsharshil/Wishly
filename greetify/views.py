@@ -188,7 +188,7 @@ def google_auth_mobile(request):
     if refresh_token:
         profile.google_refresh_token = refresh_token
         
-    if 'picture' in user_info:
+    if 'picture' in user_info and not profile.profile_picture:
         profile.profile_picture = user_info['picture']
         
     profile.last_login_provider = 'GOOGLE'
@@ -295,11 +295,33 @@ class AppleAuthVerifyView(APIView):
             }
         }, status=status.HTTP_200_OK)
 
-@api_view(['GET'])
+@api_view(['GET', 'PUT', 'PATCH'])
 @permission_classes([IsAuthenticated])
 def get_profile(request):
-    """Returns the current user's profile."""
+    """Returns or updates the current user's profile."""
     profile, created = UserProfile.objects.get_or_create(user=request.user)
+    
+    if request.method in ['PUT', 'PATCH']:
+        first_name = request.data.get('first_name')
+        last_name = request.data.get('last_name')
+        profile_picture = request.data.get('profile_picture')
+        
+        user_updated = False
+        if first_name is not None:
+            request.user.first_name = first_name
+            user_updated = True
+        if last_name is not None:
+            request.user.last_name = last_name
+            user_updated = True
+            
+        if user_updated:
+            request.user.save()
+            
+        if profile_picture is not None:
+            profile.profile_picture = profile_picture
+            
+        profile.save()
+        
     serializer = UserProfileSerializer(profile)
     return Response(serializer.data)
 
