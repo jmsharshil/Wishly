@@ -26,13 +26,32 @@ def get_google_credentials(user):
     profile = user.profile
     if not profile.google_access_token:
         return None
-    return Credentials(
+    
+    creds = Credentials(
         token=profile.google_access_token,
         refresh_token=profile.google_refresh_token,
         token_uri="https://oauth2.googleapis.com/token",
         client_id=os.environ.get('GOOGLE_CLIENT_ID'),
         client_secret=os.environ.get('GOOGLE_CLIENT_SECRET'),
     )
+    
+    # Proactively refresh if the token is expired
+    if creds.expired or not creds.valid:
+        if creds.refresh_token:
+            try:
+                from google.auth.transport.requests import Request
+                creds.refresh(Request())
+                # Save the refreshed token immediately
+                profile.google_access_token = creds.token
+                profile.save()
+            except Exception as e:
+                print(f"Failed to refresh Google token: {e}")
+                # Token is completely dead, return None so the caller can handle it
+                return None
+        else:
+            return None
+    
+    return creds
 
 def _save_creds_if_refreshed(user, creds):
     if creds and creds.token and creds.token != user.profile.google_access_token:
