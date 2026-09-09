@@ -24,6 +24,7 @@ urlpatterns = [
     
     path('event-types/', views.get_event_types, name='event-types'),
     path('contacts/', views.get_contact_list, name='contacts'),
+    path('notes/<int:pk>/delete/', views.delete_note, name='delete-note'),
     
     path('', include(router.urls)),
 ]

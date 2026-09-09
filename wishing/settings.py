@@ -29,7 +29,7 @@ APPLE_CLIENT_ID = os.environ.get('APPLE_CLIENT_ID', 'org.reactjs.native.jmsWishl
 SECRET_KEY = 'django-insecure-g^5+1wn$t)jna_-ap332hotd(_86v9-fuvorf6l(pwyi#t!b%k'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
