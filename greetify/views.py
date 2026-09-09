@@ -188,7 +188,7 @@ def google_auth_mobile(request):
     if refresh_token:
         profile.google_refresh_token = refresh_token
         
-    if 'picture' in user_info:
+    if 'picture' in user_info and not profile.profile_picture:
         profile.profile_picture = user_info['picture']
         
     profile.last_login_provider = 'GOOGLE'
@@ -317,7 +317,24 @@ def get_profile(request):
         if user_updated:
             request.user.save()
             
-        # We no longer allow profile picture edits via API. It comes only from Google/Apple.
+        # Handle file upload for profile picture
+        profile_picture_file = request.FILES.get('profile_picture_file')
+        if profile_picture_file:
+            from greetify.utils import upload_image_to_azure
+            try:
+                uploaded_url = upload_image_to_azure(profile_picture_file, profile_picture_file.name)
+                profile.profile_picture = uploaded_url
+            except Exception as e:
+                print(f"Error uploading profile picture: {e}")
+                pass
+        elif 'profile_picture' in request.data:
+            # Fallback for empty string to remove picture
+            pic = request.data['profile_picture']
+            if pic == "":
+                profile.profile_picture = ""
+            # We ignore raw string URLs otherwise since it should come from Google/Apple or file upload
+            
+        profile.save()
         
     serializer = UserProfileSerializer(profile)
     return Response(serializer.data)

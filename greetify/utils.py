@@ -58,3 +58,27 @@ def extract_event_details(summary_raw):
         is_explicit_format = True
         
     return name, event_type, is_explicit_format
+
+import os
+import uuid
+from azure.storage.blob import BlobServiceClient
+
+def upload_image_to_azure(file_obj, original_filename):
+    connection_string = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
+    container_name = os.environ.get('AZURE_STORAGE_CONTAINER_NAME', 'media')
+
+    if not connection_string:
+        raise ValueError('AZURE_STORAGE_CONNECTION_STRING is not set')
+
+    blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+    
+    ext = original_filename.split('.')[-1] if '.' in original_filename else 'jpg'
+    blob_name = f'profiles/{uuid.uuid4()}.{ext}'
+    
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+    
+    # Use content_settings for image content type if needed, but simple upload works:
+    blob_client.upload_blob(file_obj, overwrite=True)
+    
+    return blob_client.url
+

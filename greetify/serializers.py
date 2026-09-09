@@ -8,10 +8,17 @@ class UserProfileSerializer(serializers.ModelSerializer):
     email = serializers.CharField(source='user.email', read_only=True)
     first_name = serializers.CharField(source='user.first_name', read_only=True)
     last_name = serializers.CharField(source='user.last_name', read_only=True)
+    name = serializers.SerializerMethodField()
 
     class Meta:
         model = UserProfile
-        fields = ('username', 'email', 'first_name', 'last_name', 'profile_picture', 'subscription_tier', 'last_login_provider')
+        fields = ('username', 'email', 'name', 'first_name', 'last_name', 'profile_picture', 'subscription_tier', 'last_login_provider')
+
+    def get_name(self, obj):
+        full_name = f"{obj.user.first_name} {obj.user.last_name}".strip()
+        if full_name:
+            return full_name
+        return obj.user.username
 
 class FlexibleDateField(serializers.DateField):
     def to_internal_value(self, value):
