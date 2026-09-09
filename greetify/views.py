@@ -1084,6 +1084,7 @@ class AppleSyncView(APIView):
                     if c_name and len(c_name) > 2 and c_name in title_lower:
                         matched_contact = c_info
                         break
+
                         
             if matched_contact:
                 phones = matched_contact.get('phoneNumbers', [])
