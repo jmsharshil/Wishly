@@ -757,15 +757,10 @@ class EventViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         new_notes = serializer.validated_data.pop('new_notes', [])
         
-        # Check if notes_for_ai is provided in the request
-        notes_for_ai = self.request.data.get('notes_for_ai', None)
-        
         event = serializer.save()
         
-        if notes_for_ai and notes_for_ai.strip():
-            from .models import EventNote
-            EventNote.objects.create(event=event, text=notes_for_ai.strip())
-        
+        # Only add explicitly provided new notes — do NOT auto-create from notes_for_ai on update
+        # (notes_for_ai is just the AI context field, not a user-visible note)
         for text in new_notes:
             if text.strip():
                 from .models import EventNote
