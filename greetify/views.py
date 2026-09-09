@@ -886,6 +886,27 @@ class AppleSyncView(APIView):
                 contact_map[full_name] = contact_info
             if given_name:
                 contact_map[given_name.lower()] = contact_info
+                
+        # Store raw contacts in JSONField
+        lightweight_contacts = []
+        for contact_info in contacts_data:
+            given_name = contact_info.get('givenName', '')
+            family_name = contact_info.get('familyName', '')
+            name = f"{given_name} {family_name}".strip()
+            
+            phones = contact_info.get('phoneNumbers', [])
+            phone = phones[0] if phones else ''
+            
+            if phone and name:
+                lightweight_contacts.append({
+                    'name': name,
+                    'contact_number': phone,
+                    'profile_picture': ''
+                })
+        
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.synced_contacts = lightweight_contacts
+        profile.save()
 
         # Pre-fetch existing events to avoid N+1 queries during sync
         existing_events = list(Event.objects.filter(user=user))
@@ -1096,22 +1117,26 @@ def get_contact_list(request):
         if key not in unique_contacts:
             unique_contacts[key] = c
             
-    # Dynamically fetch Google contacts if the user is a Google user
+    # Add synced contacts from UserProfile
     profile, _ = UserProfile.objects.get_or_create(user=request.user)
-    if profile.last_login_provider == 'GOOGLE':
-        from .services.google_service import get_google_contacts_list
-        google_result = get_google_contacts_list(request.user)
-        if "contacts" in google_result:
-            for gc in google_result["contacts"]:
-                phone = gc.get('phone')
-                if phone: # Only include if they have a phone number
-                    key = (gc['name'].strip().lower(), phone)
-                    if key not in unique_contacts:
-                        unique_contacts[key] = {
-                            'name': gc['name'],
-                            'contact_number': phone,
-                            'profile_picture': gc.get('profile_picture', '')
-                        }
+    if profile.synced_contacts:
+        for sc in profile.synced_contacts:
+            name = sc.get('name', '')
+            phone = sc.get('contact_number', '')
+            
+            # Apply search filter to synced contacts as well
+            if search_query:
+                if search_query not in name.lower() and search_query not in phone.lower():
+                    continue
+                    
+            if phone:
+                key = (name.strip().lower(), phone)
+                if key not in unique_contacts:
+                    unique_contacts[key] = {
+                        'name': name,
+                        'contact_number': phone,
+                        'profile_picture': sc.get('profile_picture', '')
+                    }
             
     result = list(unique_contacts.values())
     

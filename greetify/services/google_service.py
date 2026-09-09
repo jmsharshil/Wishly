@@ -92,9 +92,11 @@ def fetch_events_from_google(user):
                 pageSize=1000
             ).execute()
             connections = results.get('connections', [])
+            lightweight_contacts = []
             for person in connections:
                 names = person.get('names', [])
                 phones = person.get('phoneNumbers', [])
+                photos = person.get('photos', [])
                 birthdays = person.get('birthdays', [])
                 events_list = person.get('events', [])
                 
@@ -106,30 +108,43 @@ def fetch_events_from_google(user):
                     if 'date' in e:
                         valid_dates.append(e['date'])
                         
-                if names:
-                    name_str = names[0].get('displayName', '').strip().lower()
+                name_str = names[0].get('displayName', '').strip().lower() if names else ''
+                display_name = names[0].get('displayName', '').strip() if names else ''
+                
+                phone_val = phones[0].get('value', '') if phones else None
+                if phone_val:
+                    import re
+                    phone_val = re.sub(r'[^\d+]', '', phone_val)
                     
-                    phone_val = phones[0].get('value', '') if phones else None
-                    if phone_val:
-                        import re
-                        phone_val = re.sub(r'[^\d+]', '', phone_val)
+                photo_url = photos[0].get('url', '') if photos else ''
+                    
+                if name_str and phone_val:
+                    contact_phone_map_name[name_str] = phone_val
+                    lightweight_contacts.append({
+                        'name': display_name,
+                        'contact_number': phone_val,
+                        'profile_picture': photo_url
+                    })
+                
+                if valid_dates:
+                    for date_info in valid_dates:
+                        month = date_info.get('month')
+                        day = date_info.get('day')
+                        year = date_info.get('year')
                         
-                    if name_str and phone_val:
-                        contact_phone_map_name[name_str] = phone_val
-                    
-                    if valid_dates:
-                        for date_info in valid_dates:
-                            month = date_info.get('month')
-                            day = date_info.get('day')
-                            year = date_info.get('year')
-                            
-                            if month and day:
-                                # Create a unique key using Name + Month + Day
-                                name_key = f"{name_str}_{month}_{day}"
-                                if phone_val:
-                                    contact_phone_map_exact[name_key] = phone_val
-                                if year:
-                                    contact_original_year_map[name_key] = year
+                        if month and day:
+                            # Create a unique key using Name + Month + Day
+                            name_key = f"{name_str}_{month}_{day}"
+                            if phone_val:
+                                contact_phone_map_exact[name_key] = phone_val
+                            if year:
+                                contact_original_year_map[name_key] = year
+                                
+            # Save the full contact list to JSON field
+            from greetify.models import UserProfile
+            profile, _ = UserProfile.objects.get_or_create(user=user)
+            profile.synced_contacts = lightweight_contacts
+            profile.save()
         except Exception as e:
             from googleapiclient.errors import HttpError
             from google.auth.exceptions import RefreshError

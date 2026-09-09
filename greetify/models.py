@@ -16,6 +16,7 @@ class UserProfile(models.Model):
     profile_picture = models.URLField(blank=True, null=True)
     subscription_tier = models.CharField(max_length=10, choices=SUBSCRIPTION_CHOICES, default='FREE')
     last_login_provider = models.CharField(max_length=20, default='APP')
+    synced_contacts = models.JSONField(default=list, blank=True, help_text="Stores a lightweight JSON list of synced phone contacts")
 
     def __str__(self):
         return self.user.username
