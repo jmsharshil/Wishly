@@ -139,7 +139,9 @@ def google_auth_callback(request):
     profile.google_access_token = access_token
     if refresh_token:
         profile.google_refresh_token = refresh_token
-    if 'picture' in user_info:
+    # A Google sign-in picture is only a default. Do not replace an image the
+    # user selected in Wishly when they sign in again.
+    if user_info.get('picture') and not profile.profile_picture:
         profile.profile_picture = user_info['picture']
     profile.last_login_provider = 'GOOGLE'
     profile.save()
@@ -318,7 +320,12 @@ def get_profile(request):
             request.user.save()
             
         # Handle file upload for profile picture
-        profile_picture_file = request.FILES.get('profile_picture_file')
+        # Support both the documented multipart key and the natural field name
+        # used by clients when they attach a file to `profile_picture`.
+        profile_picture_file = (
+            request.FILES.get('profile_picture_file')
+            or request.FILES.get('profile_picture')
+        )
         if profile_picture_file:
             from greetify.utils import upload_image_to_azure
             try:
@@ -326,13 +333,23 @@ def get_profile(request):
                 profile.profile_picture = uploaded_url
             except Exception as e:
                 print(f"Error uploading profile picture: {e}")
-                pass
+                return Response(
+                    {'profile_picture': ['Image upload failed. Please try again.']},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
         elif 'profile_picture' in request.data:
-            # Fallback for empty string to remove picture
+            # A URL returned by a client-side upload is also a user-selected
+            # picture and must take precedence over a provider picture.
             pic = request.data['profile_picture']
             if pic == "":
                 profile.profile_picture = ""
-            # We ignore raw string URLs otherwise since it should come from Google/Apple or file upload
+            elif isinstance(pic, str) and pic.startswith(('http://', 'https://')):
+                profile.profile_picture = pic
+            else:
+                return Response(
+                    {'profile_picture': ['Provide an empty value, an http(s) URL, or an image file.']},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             
         profile.save()
         
