@@ -739,9 +739,64 @@ class EventViewSet(viewsets.ModelViewSet):
         """Returns a list of all distinct event types created by this user."""
         return Response(self._get_cleaned_filter_types(request.user))
 
+    # def perform_create(self, serializer):
+    #     new_notes = serializer.validated_data.pop('new_notes', [])
+    #     notes_for_ai = serializer.validated_data.get('notes_for_ai', '')
+        
+    #     event = serializer.save(user=self.request.user)
+        
+    #     if notes_for_ai and notes_for_ai.strip():
+    #         from .models import EventNote
+    #         EventNote.objects.create(event=event, text=notes_for_ai.strip())
+            
+    #     for text in new_notes:
+    #         if text.strip():
+    #             from .models import EventNote
+    #             EventNote.objects.create(event=event, text=text.strip())
+
+        
+    #     # Link existing google_contact_id if phone number matches to prevent changing name/duplicating in Google Contacts
+    #     if event.contact_number and not event.google_contact_id:
+    #         existing = Event.objects.filter(
+    #             user=self.request.user, 
+    #             contact_number=event.contact_number, 
+    #             google_contact_id__isnull=False
+    #         ).first()
+    #         if existing:
+    #             event.google_contact_id = existing.google_contact_id
+    #             event.save(update_fields=['google_contact_id'])
+                
+    #     push_event_to_google(self.request.user, event)
+    #     push_contact_to_google(self.request.user, event)
+        
+    #     # Automatically generate a wish upon event creation
+    #     async_generate_wish(self.request.user.id, event.id)
+    
     def perform_create(self, serializer):
         new_notes = serializer.validated_data.pop('new_notes', [])
         notes_for_ai = serializer.validated_data.get('notes_for_ai', '')
+        
+        validated = serializer.validated_data
+        name = validated.get('name', '').strip()
+        date = validated.get('date')
+        event_type = validated.get('event_type', '')
+        
+        # Prevent duplicate manual entries: same user + same name + same date + same type
+        existing = Event.objects.filter(
+            user=self.request.user,
+            name__iexact=name,
+            date=date,
+            event_type__iexact=event_type,
+            source='APP',
+        ).first()
+        
+        if existing:
+            # Already exists — return the existing event instead of creating a duplicate
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                'detail': 'An event with this name, date, and type already exists.',
+                'existing_event_id': existing.id
+            })
         
         event = serializer.save(user=self.request.user)
         
@@ -754,22 +809,19 @@ class EventViewSet(viewsets.ModelViewSet):
                 from .models import EventNote
                 EventNote.objects.create(event=event, text=text.strip())
 
-        
-        # Link existing google_contact_id if phone number matches to prevent changing name/duplicating in Google Contacts
         if event.contact_number and not event.google_contact_id:
-            existing = Event.objects.filter(
+            existing_contact = Event.objects.filter(
                 user=self.request.user, 
                 contact_number=event.contact_number, 
                 google_contact_id__isnull=False
             ).first()
-            if existing:
-                event.google_contact_id = existing.google_contact_id
+            if existing_contact:
+                event.google_contact_id = existing_contact.google_contact_id
                 event.save(update_fields=['google_contact_id'])
                 
         push_event_to_google(self.request.user, event)
         push_contact_to_google(self.request.user, event)
         
-        # Automatically generate a wish upon event creation
         async_generate_wish(self.request.user.id, event.id)
 
     def perform_update(self, serializer):
