@@ -3,6 +3,26 @@ from django.contrib.auth.models import User
 from django.utils import timezone
 from .models import UserProfile, Event, WishHistory, EventNote
 
+# class UserProfileSerializer(serializers.ModelSerializer):
+#     username = serializers.CharField(source='user.username', read_only=True)
+#     email = serializers.CharField(source='user.email', read_only=True)
+#     first_name = serializers.CharField(source='user.first_name', read_only=True)
+#     last_name = serializers.CharField(source='user.last_name', read_only=True)
+#     name = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = UserProfile
+#         fields = ('username', 'email', 'name', 'first_name', 'last_name', 'profile_picture', 'subscription_tier', 'last_login_provider')
+
+#     def get_name(self, obj):
+#         full_name = f"{obj.user.first_name} {obj.user.last_name}".strip()
+#         if full_name:
+#             return full_name
+#         return obj.user.username
+
+import re
+
+
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     email = serializers.CharField(source='user.email', read_only=True)
@@ -18,8 +38,39 @@ class UserProfileSerializer(serializers.ModelSerializer):
         full_name = f"{obj.user.first_name} {obj.user.last_name}".strip()
         if full_name:
             return full_name
-        return obj.user.username
+        return self._pretty_name_from_username(obj.user.username, obj.user.email)
 
+    @staticmethod
+    def _pretty_name_from_username(username, email=None):
+        """
+        Builds a presentable display name when the user has no first/last
+        name set (e.g. Google sign-in that never filled in a name).
+        Falls back through: email local-part -> username, stripping trailing
+        digits/numbers and separators, then title-casing what remains.
+        Examples:
+          'sagarjms768'      -> 'Sagarjms'
+          'priya_patel99'    -> 'Priya Patel'
+          'john.doe'         -> 'John Doe'
+          '12345' (all digits) -> 'User' (nothing usable left)
+        """
+        raw = username or ''
+        if email and '@' in email:
+            raw = email.split('@')[0]
+
+        # Replace common separators with spaces
+        cleaned = re.sub(r'[._\-]+', ' ', raw)
+
+        # Strip trailing digits (e.g. 'sagarjms768' -> 'sagarjms')
+        cleaned = re.sub(r'\d+$', '', cleaned).strip()
+
+        # If digits are in the middle/start too, just remove all remaining digits
+        cleaned = re.sub(r'\d+', ' ', cleaned).strip()
+        cleaned = re.sub(r'\s+', ' ', cleaned)
+
+        if not cleaned:
+            return 'User'
+
+        return cleaned.title()
 class FlexibleDateField(serializers.DateField):
     def to_internal_value(self, value):
         if isinstance(value, str):
