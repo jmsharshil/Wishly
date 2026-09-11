@@ -1009,6 +1009,19 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
             return self.get_paginated_response(response_data)
         return Response(response_data)
 
+    def retrieve(self, request, *args, **kwargs):
+        wish = self.get_object()
+        serializer = self.get_serializer(wish)
+        response_data = serializer.data
+        sent_wishes = WishHistory.objects.filter(
+            user=request.user,
+            event=wish.event,
+            status='SENT'
+        ).order_by('-created_at')
+        response_data['sent_count'] = sent_wishes.count()
+        response_data['sent_wishes'] = self.get_serializer(sent_wishes, many=True).data
+        return Response(response_data)
+
     def get_queryset(self):
         queryset = WishHistory.objects.filter(user=self.request.user, status='SENT')
         
