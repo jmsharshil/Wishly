@@ -38,6 +38,8 @@ class EventSerializer(serializers.ModelSerializer):
     generated_wish_preview = serializers.SerializerMethodField()
     generated_wish_id = serializers.SerializerMethodField()
     previous_wishes = serializers.SerializerMethodField()
+    sent_count = serializers.SerializerMethodField()
+    sent_wishes = serializers.SerializerMethodField()
     user_profile_picture = serializers.SerializerMethodField()
     age = serializers.SerializerMethodField()
     notes = EventNoteSerializer(many=True, read_only=True)
@@ -91,6 +93,20 @@ class EventSerializer(serializers.ModelSerializer):
         
     def get_previous_wishes(self, obj):
         wishes = obj.wishes.order_by('-created_at')
+        return [
+            {
+                'id': wish.id,
+                'generated_text': wish.generated_text,
+                'created_at': wish.created_at,
+                'status': wish.status
+            } for wish in wishes
+        ]
+
+    def get_sent_count(self, obj):
+        return obj.wishes.filter(status='SENT').count()
+
+    def get_sent_wishes(self, obj):
+        wishes = obj.wishes.filter(status='SENT').order_by('-created_at')
         return [
             {
                 'id': wish.id,
