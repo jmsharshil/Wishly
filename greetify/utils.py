@@ -105,3 +105,21 @@ def upload_image_to_azure(file_obj, original_filename):
     if custom_domain:
         return f"https://{custom_domain}/{container_name}/{blob_name}"
     return blob_client.url
+
+def pretty_name_from_username(username, email=None):
+    """
+    Builds a presentable display name when the user has no first/last name
+    set (e.g. Google/Apple sign-in that never filled in a name).
+    """
+    raw = username or ''
+    if email and '@' in email:
+        raw = email.split('@')[0]
+
+    cleaned = re.sub(r'[._\-]+', ' ', raw)
+    cleaned = re.sub(r'\d+', ' ', cleaned).strip()
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+
+    if not cleaned:
+        return 'User'
+
+    return cleaned.title()

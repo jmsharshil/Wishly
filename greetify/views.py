@@ -24,6 +24,7 @@ from django.db.models import Q
 from django.db import transaction
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from greetify.utils import pretty_name_from_username
 
 # Create a thread pool to avoid spawning 100+ threads simultaneously during bulk sync
 ai_executor = ThreadPoolExecutor(max_workers=5)
@@ -204,7 +205,7 @@ def google_auth_mobile(request):
         'user': {
             'id': user.id,
             'email': user.email,
-            'name': user_info.get('name') or user.username,
+            'name': user_info.get('name') or pretty_name_from_username(user.username, user.email),
             'first_name': user.first_name,
             'last_name': user.last_name,
             'phone_number': profile.phone_number,
@@ -289,7 +290,7 @@ class AppleAuthVerifyView(APIView):
             'user': {
                 'id': user.id,
                 'email': user.email,
-                'name': f"{user.first_name} {user.last_name}".strip() or user.username,
+                'name': f"{user.first_name} {user.last_name}".strip() or pretty_name_from_username(user.username, user.email),
                 'first_name': user.first_name,
                 'last_name': user.last_name,
                 'phone_number': user.profile.phone_number if hasattr(user, 'profile') else None,
