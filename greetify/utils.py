@@ -63,22 +63,45 @@ import os
 import uuid
 from azure.storage.blob import BlobServiceClient
 
-def upload_image_to_azure(file_obj, original_filename):
-    connection_string = os.environ.get('AZURE_STORAGE_CONNECTION_STRING')
-    container_name = os.environ.get('AZURE_STORAGE_CONTAINER_NAME', 'media')
 
-    if not connection_string:
-        raise ValueError('AZURE_STORAGE_CONNECTION_STRING is not set')
+def upload_image_to_azure(file_obj, original_filename):
+    """
+    Uploads a file-like object to Azure Blob Storage and returns its public URL.
+    Reads config from AZURE_ACCOUNT_NAME, AZURE_ACCOUNT_KEY, AZURE_MEDIA_CONTAINER,
+    and (optionally) AZURE_CUSTOM_DOMAIN.
+    """
+    account_name = os.environ.get('AZURE_ACCOUNT_NAME')
+    account_key = os.environ.get('AZURE_ACCOUNT_KEY')
+    container_name = os.environ.get('AZURE_MEDIA_CONTAINER', 'media')
+
+    if not account_name or not account_key:
+        raise ValueError('AZURE_ACCOUNT_NAME / AZURE_ACCOUNT_KEY are not set')
+
+    connection_string = (
+        f"DefaultEndpointsProtocol=https;"
+        f"AccountName={account_name};"
+        f"AccountKey={account_key};"
+        f"EndpointSuffix=core.windows.net"
+    )
 
     blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-    
+
+    # Create the container automatically if it doesn't exist yet
+    container_client = blob_service_client.get_container_client(container_name)
+    if not container_client.exists():
+        container_client.create_container()
+
     ext = original_filename.split('.')[-1] if '.' in original_filename else 'jpg'
     blob_name = f'profiles/{uuid.uuid4()}.{ext}'
-    
-    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-    
-    # Use content_settings for image content type if needed, but simple upload works:
-    blob_client.upload_blob(file_obj, overwrite=True)
-    
-    return blob_client.url
 
+    blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
+
+    # Ensure the stream is at the start in case something upstream already read it
+    file_obj.seek(0)
+    blob_client.upload_blob(file_obj, overwrite=True)
+
+    # Prefer the custom domain for the returned URL if one is configured
+    custom_domain = os.environ.get('AZURE_CUSTOM_DOMAIN')
+    if custom_domain:
+        return f"https://{custom_domain}/{container_name}/{blob_name}"
+    return blob_client.url
