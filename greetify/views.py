@@ -983,6 +983,32 @@ class WishHistoryViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixin
     permission_classes = [IsAuthenticated]
     pagination_class = StandardResultsSetPagination
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        grouped_wishes = {}
+
+        for wish in queryset:
+            contact_number = (wish.event.contact_number or '').strip() if wish.event else ''
+            person_name = ' '.join((wish.event.name or '').lower().split()) if wish.event else ''
+            person_key = f'phone:{contact_number}' if contact_number else f'name:{person_name}'
+
+            if person_key not in grouped_wishes:
+                grouped_wishes[person_key] = {'wish': wish, 'wishes': []}
+            grouped_wishes[person_key]['wishes'].append(wish)
+
+        grouped_wishes = list(grouped_wishes.values())
+        page = self.paginate_queryset(grouped_wishes)
+        response_data = []
+        for group in page if page is not None else grouped_wishes:
+            item = self.get_serializer(group['wish']).data
+            item['sent_count'] = len(group['wishes'])
+            item['sent_wishes'] = self.get_serializer(group['wishes'], many=True).data
+            response_data.append(item)
+
+        if page is not None:
+            return self.get_paginated_response(response_data)
+        return Response(response_data)
+
     def get_queryset(self):
         queryset = WishHistory.objects.filter(user=self.request.user, status='SENT')
         
