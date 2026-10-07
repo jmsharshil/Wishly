@@ -201,210 +201,217 @@ def fetch_events_from_google(user):
             from greetify.models import DeletedEventLog
             deleted_ids = set(DeletedEventLog.objects.filter(user=user).values_list('external_id', flat=True))
             
-            events_result = service.events().list(
-                calendarId=calendar_id, 
-                timeMin=time_min,
-                timeMax=time_max,
-                maxResults=100, 
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
-            events = events_result.get('items', [])
-
             import re
             processed_master_ids = set()
+            page_token = None
             
-            for item in events:
-                google_id = item.get('id')
-                master_id = item.get('recurringEventId') or google_id
-                
-                if master_id in deleted_ids or google_id in deleted_ids:
-                    continue
-                    
-                if master_id in processed_master_ids:
-                    continue
-                processed_master_ids.add(master_id)
-                    
-                summary_raw = item.get('summary', 'Unknown')
-                summary = summary_raw.lower()
-                is_birthday_cal = calendar_id != 'primary'
-                
-                description = item.get('description') or ''
-                contact_number = None
-                tags = ''
-                notes_for_ai = ''
-                
-                if description:
-                    # Look for a number with 10 to 15 digits (optional leading +, spaces, dashes, parentheses)
-                    match = re.search(r'\+?(?:\d[\s\-\(\)]*){10,15}', description)
-                    if match:
-                        raw_number = match.group(0)
-                        # clean the number to just digits and +
-                        cleaned_number = re.sub(r'[^\d+]', '', raw_number)
-                        # verify it actually has 10-15 digits
-                        if 10 <= len(re.sub(r'\D', '', cleaned_number)) <= 15:
-                            contact_number = cleaned_number
-                            description = description.replace(raw_number, '')
-                        
-                    # Extract hashtags as tags
-                    hashtags = re.findall(r'#(\w+)', description)
-                    if hashtags:
-                        tags = ", ".join(hashtags)
-                        description = re.sub(r'#\w+', '', description)
-                        
-                    # The remaining text is notes for AI
-                    notes_for_ai = description.strip()
-                
-                from greetify.utils import extract_event_details
-                name, event_type, is_explicit_format = extract_event_details(summary_raw)
+            while True:
+                events_result = service.events().list(
+                    calendarId=calendar_id, 
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    maxResults=2500, 
+                    singleEvents=True,
+                    orderBy='startTime',
+                    pageToken=page_token
+                ).execute()
+                events = events_result.get('items', [])
 
-                # Finally, if it's from contacts and we still couldn't figure it out, assume Birthday
-                if event_type == 'Custom' and is_birthday_cal:
-                    event_type = 'Birthday'
+                for item in events:
+                    google_id = item.get('id')
+                    master_id = item.get('recurringEventId') or google_id
+                    
+                    if master_id in deleted_ids or google_id in deleted_ids:
+                        continue
                         
-                start = item['start'].get('date') or item['start'].get('dateTime')
-                if not start:
-                    continue
-                
-                # Convert to YYYY-MM-DD
-                date_str = start[:10]
-                fetched_google_ids.append(master_id)
-
-                source_val = 'GOOGLE_CONTACTS' if is_birthday_cal else 'GOOGLE_CALENDAR'
-                try:
-                    dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-                except ValueError:
-                    continue
+                    if master_id in processed_master_ids:
+                        continue
+                    processed_master_ids.add(master_id)
+                        
+                    summary_raw = item.get('summary', 'Unknown')
+                    summary = summary_raw.lower()
+                    is_birthday_cal = calendar_id != 'primary'
                     
-                if is_birthday_cal and not contact_number:
-                    clean_name = name.strip().lower()
+                    description = item.get('description') or ''
+                    contact_number = None
+                    tags = ''
+                    notes_for_ai = ''
                     
-                    # 1. Try Exact match with Date
-                    exact_key = f"{clean_name}_{dt.month}_{dt.day}"
-                    if exact_key in contact_phone_map_exact:
-                        contact_number = contact_phone_map_exact[exact_key]
+                    if description:
+                        # Look for a number with 10 to 15 digits (optional leading +, spaces, dashes, parentheses)
+                        match = re.search(r'\+?(?:\d[\s\-\(\)]*){10,15}', description)
+                        if match:
+                            raw_number = match.group(0)
+                            # clean the number to just digits and +
+                            cleaned_number = re.sub(r'[^\d+]', '', raw_number)
+                            # verify it actually has 10-15 digits
+                            if 10 <= len(re.sub(r'\D', '', cleaned_number)) <= 15:
+                                contact_number = cleaned_number
+                                description = description.replace(raw_number, '')
                             
-                    # 2. Try Exact Name match (fallback)
-                    if not contact_number and clean_name in contact_phone_map_name:
-                        contact_number = contact_phone_map_name[clean_name]
-                        
-                    # 3. Try Partial match (fallback) - Is contact name inside the raw calendar summary?
-                    if not contact_number:
-                        summary_lower = summary_raw.lower()
-                        for c_name, c_phone in contact_phone_map_name.items():
-                            if c_name and len(c_name) > 2:
-                                if re.search(rf'\b{re.escape(c_name)}\b', summary_lower):
-                                    contact_number = c_phone
-                                    break
-
-                # Check if event already exists by master_id, or fallback to instance id for backward compatibility
-                existing_event = existing_by_google_id.get(master_id)
-                if not existing_event:
-                    existing_event = existing_by_google_id.get(google_id)
+                        # Extract hashtags as tags
+                        hashtags = re.findall(r'#(\w+)', description)
+                        if hashtags:
+                            tags = ", ".join(hashtags)
+                            description = re.sub(r'#\w+', '', description)
+                            
+                        # The remaining text is notes for AI
+                        notes_for_ai = description.strip()
                     
-                has_original_year = False
-                if event_type in ['Birthday', 'Anniversary']:
-                    exact_key = f"{name.strip().lower()}_{dt.month}_{dt.day}"
-                    if exact_key in contact_original_year_map:
-                        orig_year = contact_original_year_map[exact_key]
-                        date_str = f"{orig_year:04d}-{dt.month:02d}-{dt.day:02d}"
+                    from greetify.utils import extract_event_details
+                    name, event_type, is_explicit_format = extract_event_details(summary_raw)
+    
+                    # Finally, if it's from contacts and we still couldn't figure it out, assume Birthday
+                    if event_type == 'Custom' and is_birthday_cal:
+                        event_type = 'Birthday'
+                            
+                    start = item['start'].get('date') or item['start'].get('dateTime')
+                    if not start:
+                        continue
+                    
+                    # Convert to YYYY-MM-DD
+                    date_str = start[:10]
+                    fetched_google_ids.append(master_id)
+    
+                    source_val = 'GOOGLE_CONTACTS' if is_birthday_cal else 'GOOGLE_CALENDAR'
+                    try:
                         dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
-                        has_original_year = True
+                    except ValueError:
+                        continue
                         
-                if not existing_event:
-                    # Deduplicate: If an event with the same name, date, and type exists (e.g. from a different calendar/contact)
-                    clean_name_match = name.strip().lower()
-                    if event_type in ['Birthday', 'Anniversary']:
-                        existing_event = existing_by_name_md.get((clean_name_match, dt.month, dt.day))
-                        if not existing_event and contact_number:
-                            import re
-                            std_phone = re.sub(r'[^\d+]', '', contact_number)
-                            existing_event = existing_by_phone_md.get((std_phone, dt.month, dt.day))
-                    else:
-                        existing_event = existing_by_name_ymd.get((clean_name_match, dt.year, dt.month, dt.day))
-
-                if not existing_event:
-                    event = Event.objects.create(
-                        user=user,
-                        name=name,
-                        date=date_str,
-                        event_type=event_type,
-                        google_event_id=master_id,
-                        contact_number=contact_number,
-                        tags=tags,
-                        notes_for_ai=notes_for_ai,
-                        source=source_val
-                    )
-                    synced_count += 1
-                    
-                    if master_id:
-                        existing_by_google_id[master_id] = event
-                    clean_name_match = name.strip().lower()
-                    if event_type in ['Birthday', 'Anniversary']:
-                        existing_by_name_md[(clean_name_match, dt.month, dt.day)] = event
-                        if contact_number:
-                            existing_by_phone_md[(contact_number, dt.month, dt.day)] = event
-                    else:
-                        existing_by_name_ymd[(clean_name_match, dt.year, dt.month, dt.day)] = event
-                    
-                    # Generate wish automatically for the fetched event in the background
-                    from greetify.views import async_generate_wish
-                    async_generate_wish(user.id, event.id)
-                else:
-                    # If it exists, update it if name or date changed
-                    has_changes = False
-                    if existing_event.google_event_id != master_id:
-                        existing_event.google_event_id = master_id
-                        has_changes = True
-                    if existing_event.name != name:
-                        existing_event.name = name
-                        has_changes = True
-                    if str(existing_event.date) != date_str:
-                        new_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                    if is_birthday_cal and not contact_number:
+                        clean_name = name.strip().lower()
                         
-                        if existing_event.event_type in ['Birthday', 'Anniversary'] and not has_original_year:
-                            # Preserve the original year we have in DB, just update month/day if they changed
-                            try:
-                                orig_year = existing_event.date.year if not isinstance(existing_event.date, str) else int(existing_event.date[:4])
-                                updated_date = datetime.date(orig_year, new_dt.month, new_dt.day)
+                        # 1. Try Exact match with Date
+                        exact_key = f"{clean_name}_{dt.month}_{dt.day}"
+                        if exact_key in contact_phone_map_exact:
+                            contact_number = contact_phone_map_exact[exact_key]
                                 
-                                curr_date = existing_event.date
-                                if isinstance(curr_date, str):
-                                    curr_date = datetime.datetime.strptime(curr_date, "%Y-%m-%d").date()
-                                    
-                                if curr_date != updated_date:
-                                    existing_event.date = updated_date
-                                    has_changes = True
-                            except Exception as e:
-                                print(f"Error preserving original year for event {existing_event.id}: {e}")
-                                pass
+                        # 2. Try Exact Name match (fallback)
+                        if not contact_number and clean_name in contact_phone_map_name:
+                            contact_number = contact_phone_map_name[clean_name]
+                            
+                        # 3. Try Partial match (fallback) - Is contact name inside the raw calendar summary?
+                        if not contact_number:
+                            summary_lower = summary_raw.lower()
+                            for c_name, c_phone in contact_phone_map_name.items():
+                                if c_name and len(c_name) > 2:
+                                    if re.search(rf'\b{re.escape(c_name)}\b', summary_lower):
+                                        contact_number = c_phone
+                                        break
+    
+                    # Check if event already exists by master_id, or fallback to instance id for backward compatibility
+                    existing_event = existing_by_google_id.get(master_id)
+                    if not existing_event:
+                        existing_event = existing_by_google_id.get(google_id)
+                        
+                    has_original_year = False
+                    if event_type in ['Birthday', 'Anniversary']:
+                        exact_key = f"{name.strip().lower()}_{dt.month}_{dt.day}"
+                        if exact_key in contact_original_year_map:
+                            orig_year = contact_original_year_map[exact_key]
+                            date_str = f"{orig_year:04d}-{dt.month:02d}-{dt.day:02d}"
+                            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                            has_original_year = True
+                            
+                    if not existing_event:
+                        # Deduplicate: If an event with the same name, date, and type exists (e.g. from a different calendar/contact)
+                        clean_name_match = name.strip().lower()
+                        if event_type in ['Birthday', 'Anniversary']:
+                            existing_event = existing_by_name_md.get((clean_name_match, dt.month, dt.day))
+                            if not existing_event and contact_number:
+                                import re
+                                std_phone = re.sub(r'[^\d+]', '', contact_number)
+                                existing_event = existing_by_phone_md.get((std_phone, dt.month, dt.day))
                         else:
-                            # Update full date (since it's a one-time event or we have the TRUE original year)
-                            existing_event.date = new_dt
-                            has_changes = True
-                    if contact_number and existing_event.contact_number != contact_number:
-                        existing_event.contact_number = contact_number
-                        has_changes = True
-                        number_added = True
-                    else:
-                        number_added = False
-                        
-                    if tags and existing_event.tags != tags:
-                        existing_event.tags = tags
-                        has_changes = True
-                    if notes_for_ai and existing_event.notes_for_ai != notes_for_ai:
-                        existing_event.notes_for_ai = notes_for_ai
-                        has_changes = True
-                    if existing_event.source != source_val and existing_event.source != 'APP':
-                        existing_event.source = source_val
-                        has_changes = True
-                        
-                    if has_changes:
-                        existing_event.save()
+                            existing_event = existing_by_name_ymd.get((clean_name_match, dt.year, dt.month, dt.day))
+    
+                    if not existing_event:
+                        event = Event.objects.create(
+                            user=user,
+                            name=name,
+                            date=date_str,
+                            event_type=event_type,
+                            google_event_id=master_id,
+                            contact_number=contact_number,
+                            tags=tags,
+                            notes_for_ai=notes_for_ai,
+                            source=source_val
+                        )
                         synced_count += 1
+                        
+                        if master_id:
+                            existing_by_google_id[master_id] = event
+                        clean_name_match = name.strip().lower()
+                        if event_type in ['Birthday', 'Anniversary']:
+                            existing_by_name_md[(clean_name_match, dt.month, dt.day)] = event
+                            if contact_number:
+                                existing_by_phone_md[(contact_number, dt.month, dt.day)] = event
+                        else:
+                            existing_by_name_ymd[(clean_name_match, dt.year, dt.month, dt.day)] = event
+                        
+                        # Generate wish automatically for the fetched event in the background
+                        from greetify.views import async_generate_wish
+                        async_generate_wish(user.id, event.id)
+                    else:
+                        # If it exists, update it if name or date changed
+                        has_changes = False
+                        if existing_event.google_event_id != master_id:
+                            existing_event.google_event_id = master_id
+                            has_changes = True
+                        if existing_event.name != name:
+                            existing_event.name = name
+                            has_changes = True
+                        if str(existing_event.date) != date_str:
+                            new_dt = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+                            
+                            if existing_event.event_type in ['Birthday', 'Anniversary'] and not has_original_year:
+                                # Preserve the original year we have in DB, just update month/day if they changed
+                                try:
+                                    orig_year = existing_event.date.year if not isinstance(existing_event.date, str) else int(existing_event.date[:4])
+                                    updated_date = datetime.date(orig_year, new_dt.month, new_dt.day)
+                                    
+                                    curr_date = existing_event.date
+                                    if isinstance(curr_date, str):
+                                        curr_date = datetime.datetime.strptime(curr_date, "%Y-%m-%d").date()
+                                        
+                                    if curr_date != updated_date:
+                                        existing_event.date = updated_date
+                                        has_changes = True
+                                except Exception as e:
+                                    print(f"Error preserving original year for event {existing_event.id}: {e}")
+                                    pass
+                            else:
+                                # Update full date (since it's a one-time event or we have the TRUE original year)
+                                existing_event.date = new_dt
+                                has_changes = True
+                        if contact_number and existing_event.contact_number != contact_number:
+                            existing_event.contact_number = contact_number
+                            has_changes = True
+                            number_added = True
+                        else:
+                            number_added = False
+                            
+                        if tags and existing_event.tags != tags:
+                            existing_event.tags = tags
+                            has_changes = True
+                        if notes_for_ai and existing_event.notes_for_ai != notes_for_ai:
+                            existing_event.notes_for_ai = notes_for_ai
+                            has_changes = True
+                        if existing_event.source != source_val and existing_event.source != 'APP':
+                            existing_event.source = source_val
+                            has_changes = True
+                            
+                        if has_changes:
+                            existing_event.save()
+                            synced_count += 1
                         
                         if number_added and existing_event.google_event_id and existing_event.source == 'GOOGLE_CALENDAR':
                             push_event_to_google(user, existing_event)
+                            
+                page_token = events_result.get('nextPageToken')
+                if not page_token:
+                    break
                         
         except Exception as e:
             from googleapiclient.errors import HttpError
@@ -424,10 +431,12 @@ def fetch_events_from_google(user):
     # but it was not fetched from Google, it means it was deleted on Google.
     if sync_success:
         today_str = datetime.datetime.utcnow().date().isoformat()
+        time_max_str = (datetime.datetime.utcnow() + datetime.timedelta(days=365)).date().isoformat()
         Event.objects.filter(
             user=user,
             google_event_id__isnull=False,
-            date__gte=today_str
+            date__gte=today_str,
+            date__lte=time_max_str
         ).exclude(
             google_event_id__in=fetched_google_ids
         ).delete()
